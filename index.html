@@ -483,8 +483,8 @@
       if (!c.webapp || !c.sheet) { lastError = 'sin-config'; return cached(); }
       if (inflight) return inflight;
       inflight = (async () => {
-        const url = c.webapp + '?token=' + encodeURIComponent(c.token) + '&sheetId=' + encodeURIComponent(sheetIdFrom(c.sheet));
-        const res = await fetch(url);
+        const url = c.webapp + '?token=' + encodeURIComponent(c.token) + '&sheetId=' + encodeURIComponent(sheetIdFrom(c.sheet)) + '&_=' + Date.now();
+        const res = await fetch(url, { cache: 'no-store' });
         const d = await res.json();
         if (d.ok) { lastError = null; save({ rows:d.rows||[], monthly:d.monthly, registroGid:d.registroGid, lastRow:d.lastRow, at:Date.now() }); }
         else { lastError = d.error || 'Error del servidor'; }
@@ -502,8 +502,8 @@
       const sid=sheetIdFrom(c.sheetPrev); if(!sid) return null;
       if(prevCache[sid]) return prevCache[sid];
       try{
-        const url=c.webapp+'?token='+encodeURIComponent(c.token)+'&mode=grid&sheetId='+encodeURIComponent(sid);
-        const d=await (await fetch(url)).json();
+        const url=c.webapp+'?token='+encodeURIComponent(c.token)+'&mode=grid&sheetId='+encodeURIComponent(sid)+'&_='+Date.now();
+        const d=await (await fetch(url, { cache: 'no-store' })).json();
         if(d.ok){ prevCache[sid]=d.monthly; return d.monthly; }
       }catch(e){}
       return null;
