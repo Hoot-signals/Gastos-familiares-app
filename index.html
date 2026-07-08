@@ -204,6 +204,9 @@
   .qm-row .qm-amt{font-family:'JetBrains Mono',monospace;font-weight:700}
   .qm-row .qm-del{background:none;border:none;color:var(--muted);font-size:17px;font-weight:700;cursor:pointer;padding:2px 6px;line-height:1}
   .qm-total{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:2px 3px 10px;font-weight:600}
+  .meses-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px}
+  .mes-opt{padding:11px 0;border-radius:12px;border:1px solid var(--border);background:var(--bg);color:var(--muted);font-size:14px;font-weight:600;cursor:pointer;font-family:Inter}
+  .mes-opt.active{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
   .q-cats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
   .q-cat{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
     background:var(--surface);border:1px solid var(--border);color:var(--text);
@@ -340,6 +343,21 @@
       <div class="qc-btns">
         <button class="qc-cancel" id="qcCancel">Cancelar</button>
         <button class="qc-ok" id="qcOk">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Selección de meses para una cuota (modo varias cuotas) -->
+  <div class="overlay" id="mesesPicker">
+    <div class="sheet">
+      <h2 id="mesesPickerTitle">Cuota</h2>
+      <label>Concepto <span class="opt">(opcional)</span></label>
+      <input type="text" id="mesesConcepto" placeholder="p. ej. Netflix" autocomplete="off">
+      <label style="margin-top:14px">¿En qué meses?</label>
+      <div class="meses-grid" id="mesesGrid"></div>
+      <div class="qc-btns">
+        <button class="qc-cancel" id="mesesCancel">Cancelar</button>
+        <button class="qc-ok" id="mesesConfirm">Añadir</button>
       </div>
     </div>
   </div>
@@ -510,6 +528,7 @@
   const OCULTAR_RANKING = ['Hipoteca/Alquiler']; // no se muestra en gráfico/listado (sí computa)
   const MESES_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
   const MES_INI = ['E','F','M','A','M','J','J','A','S','O','N','D'];
+  const MES_ABR = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const EMO = {
     'Alimentación':'🛒','Café/cañas/Desayunos':'☕','Gasolina/Transporte':'⛽','Comidas/Cenas restaurantes':'🍽️',
     'Compras/Ropa/Estética':'🛍️','Niños':'🧸','Ocio/Regalos/Juego':'🎉','Otros gastos':'📦','Hipoteca/Alquiler':'🏠',
@@ -599,10 +618,13 @@
     return s+'</svg>';
   }
   function stat(k,v,cls,wide){ return '<div class="stat'+(cls?' '+cls:'')+(wide?' '+wide:'')+'"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'; }
-  function statDelta(k,pct,subeMalo){
-    if(pct===null||pct===undefined) return '<div class="stat"><div class="k">'+k+'</div><div class="v">—</div></div>';
-    const bueno = subeMalo ? pct<0 : pct>0;
-    return '<div class="stat '+(bueno?'good':'bad')+'"><div class="k">'+k+'</div><div class="v">'+(pct>=0?'▲':'▼')+' '+Math.abs(pct).toFixed(0)+'%</div></div>';
+  // Variación en valores absolutos (€ o puntos porcentuales), no en % relativo
+  function statAbsDelta(k,val,esPuntos,subeMalo){
+    if(val===null||val===undefined||isNaN(val)) return '<div class="stat"><div class="k">'+k+'</div><div class="v">—</div></div>';
+    const bueno = subeMalo ? val<0 : val>0;
+    const cls = val===0 ? '' : (bueno?'good':'bad');
+    const txt = esPuntos ? (val>=0?'+':'')+val.toFixed(1)+' pp' : (val>=0?'+':'-')+eur(Math.abs(val));
+    return '<div class="stat'+(cls?' '+cls:'')+'"><div class="k">'+k+'</div><div class="v">'+txt+'</div></div>';
   }
 
   function renderDashboard(){
@@ -640,8 +662,15 @@
     let yoy=null;
     if(prev && mComparable>=0){
       const gYTDc=sumHasta(monthly.gastos,mComparable), iYTDc=sumHasta(monthly.ingresos,mComparable), aYTDc=iYTDc-gYTDc;
+      const tYTDc=iYTDc>0?aYTDc/iYTDc*100:null;
       const gp=sumHasta(prev.gastos,mComparable), ip=sumHasta(prev.ingresos,mComparable), ap=ip-gp;
-      yoy={ dGastos: gp>0?(gYTDc-gp)/gp*100:null, dAhorro: Math.abs(ap)>0?(aYTDc-ap)/Math.abs(ap)*100:null, hastaMes:mComparable };
+      const tp=ip>0?ap/ip*100:null;
+      yoy={
+        hastaMes:mComparable,
+        prevGastos:gp, prevIngresos:ip, prevAhorro:ap, prevTasa:tp,
+        dIngresos: iYTDc-ip, dGastos: gYTDc-gp,
+        dTasa: (tYTDc!=null && tp!=null) ? (tYTDc-tp) : null
+      };
     }
 
     html+='<div class="stats">';
@@ -667,8 +696,14 @@
     html+='</div>';
 
     if(yoy){ const etiqueta=esMesActual?' <span style="text-transform:none;font-weight:400">· hasta '+MESES_ES[yoy.hastaMes]+' cerrado</span>':'';
-      html+='<div class="sec-title" style="margin-top:14px">vs año anterior (mismo periodo)'+etiqueta+'</div><div class="stats">';
-      html+=statDelta('Gastos YTD',yoy.dGastos,true)+statDelta('Ahorro YTD',yoy.dAhorro,false); html+='</div>'; }
+      html+='<div class="sec-title" style="margin-top:14px">Año anterior (mismo periodo)'+etiqueta+'</div><div class="stats">';
+      html+=stat('Gastos YTD',eur(yoy.prevGastos))+stat('Ingresos YTD',eur(yoy.prevIngresos));
+      html+=stat('Ahorro YTD',eur(yoy.prevAhorro),yoy.prevAhorro>=0?'good':'bad')+stat('Tasa YTD',yoy.prevTasa!=null?yoy.prevTasa.toFixed(0)+'%':'—',yoy.prevTasa!=null&&yoy.prevTasa>=0?'good':'bad');
+      html+='</div>';
+      html+='<div class="sec-title" style="margin-top:14px">Variación vs año anterior</div><div class="stats">';
+      html+=statAbsDelta('Ingresos',yoy.dIngresos,false,false)+statAbsDelta('Gastos',yoy.dGastos,false,true);
+      html+=statAbsDelta('Tasa de ahorro',yoy.dTasa,true,false);
+      html+='</div>'; }
     else if(esMesActual && m===0) html+='<div class="dash-empty" style="padding:14px">Aún no hay ningún mes cerrado este año para comparar.</div>';
     else html+='<div class="dash-empty" style="padding:14px">No se encontró la pestaña "Global Año" (con los totales del año anterior) en tu Sheet.</div>';
 
@@ -676,7 +711,7 @@
     const insights=[];
     if(ranking.length) insights.push('Categoría top del mes: <b>'+escapeHtml(ranking[0].cat)+'</b> ('+(gastos>0?Math.round(ranking[0].val/gastos*100):0)+'%).');
     { let mx=0,mi=0; for(let i=0;i<12;i++) if((monthly.gastos[i]||0)>mx){mx=monthly.gastos[i];mi=i;} if(mx>0) insights.push('Mes más caro: <b>'+MESES_ES[mi]+'</b> ('+eur(mx)+').'); }
-    if(yoy && yoy.dGastos!=null) insights.push('Gasto acumulado <b>'+(yoy.dGastos>=0?'+':'')+yoy.dGastos.toFixed(0)+'%</b> vs año pasado.');
+    if(yoy && yoy.dGastos!=null) insights.push('Gasto acumulado <b>'+(yoy.dGastos>=0?'+':'-')+eur(Math.abs(yoy.dGastos))+'</b> vs año pasado.');
     if(insights.length){ html+='<div class="sec-title" style="margin-top:14px">Insights</div><div class="insights">'; insights.forEach(t=>html+='<div class="ins">• '+t+'</div>'); html+='</div>'; }
 
     $('dashBody').innerHTML=html;
@@ -864,9 +899,9 @@
     CATEGORIAS.forEach(cat=>{ const o=document.createElement('div'); o.className='cat-opt'; o.textContent=(EMO[cat]?EMO[cat]+'  ':'')+cat; o.onclick=()=>{ $('picker').classList.remove('open'); onCatTap(cat); }; inner.appendChild(o); });
     $('picker').classList.add('open');
   }
-  function onCatTap(cat){ if(multiMode) addToMulti(cat); else abrirConfirm(cat); }
+  function onCatTap(cat){ if(multiMode) abrirSeleccionMeses(cat); else abrirConfirm(cat); }
 
-  // ---- Modo "varias cuotas seguidas": acumula apuntes y los guarda todos de una vez ----
+  // ---- Modo "varias cuotas seguidas": acumula apuntes (cada uno en 1 o varios meses) y los guarda todos de una vez ----
   let multiMode=false, multiItems=[];
   $('qMultiToggle').addEventListener('click', ()=>{
     if(multiMode && multiItems.length && !confirm('¿Salir sin guardar? Se perderá la lista de cuotas pendiente.')) return;
@@ -876,19 +911,51 @@
     if(!multiMode){ multiItems=[]; }
     renderMultiList();
   });
-  function addToMulti(cat){
+
+  // -- Selector de meses: al elegir categoría en modo cuotas, se puede repetir el mismo
+  //    importe/concepto en varios meses del año (p.ej. una suscripción o la hipoteca) --
+  let mesesPendCat=null, mesesPendVal=0, mesesSel=new Set();
+  function abrirSeleccionMeses(cat){
     const val=qValue(); if(!(Math.abs(val)>0)){ toast('Escribe un importe'); return; }
-    multiItems.push({categoria:cat, importe:val, concepto:''});
+    mesesPendCat=cat; mesesPendVal=val;
+    const mesActual=(qDateIso||todayIso()).slice(5,7);
+    mesesSel=new Set([parseInt(mesActual,10)-1]);
+    $('mesesPickerTitle').textContent=(EMO[cat]?EMO[cat]+' ':'')+cat;
+    $('mesesConcepto').value='';
+    renderMesesGrid();
+    $('mesesPicker').classList.add('open');
+  }
+  function renderMesesGrid(){
+    $('mesesGrid').innerHTML = MES_ABR.map((n,i)=>
+      '<button type="button" class="mes-opt'+(mesesSel.has(i)?' active':'')+'" data-m="'+i+'">'+n+'</button>'
+    ).join('');
+    $('mesesGrid').querySelectorAll('.mes-opt').forEach(b=> b.addEventListener('click', ()=>{
+      const i=+b.dataset.m; if(mesesSel.has(i)) mesesSel.delete(i); else mesesSel.add(i);
+      b.classList.toggle('active');
+    }));
+  }
+  $('mesesCancel').addEventListener('click', ()=> $('mesesPicker').classList.remove('open'));
+  $('mesesPicker').addEventListener('click',(e)=>{ if(e.target===$('mesesPicker')) $('mesesPicker').classList.remove('open'); });
+  $('mesesConfirm').addEventListener('click', ()=>{
+    if(!mesesSel.size){ toast('Elige al menos un mes'); return; }
+    const anio=(qDateIso||todayIso()).slice(0,4), dia=(qDateIso||todayIso()).slice(8,10);
+    const concepto=$('mesesConcepto').value.trim();
+    Array.from(mesesSel).sort((a,b)=>a-b).forEach(mi=>{
+      multiItems.push({ categoria:mesesPendCat, importe:mesesPendVal, concepto, fecha: anio+'-'+String(mi+1).padStart(2,'0')+'-'+dia });
+    });
+    $('mesesPicker').classList.remove('open');
     qAmt=''; renderQAmount();
     renderMultiList();
-  }
+  });
+
   function renderMultiList(){
     const panel=$('qMultiPanel');
     if(!multiMode || !multiItems.length){ panel.classList.add('view-hidden'); $('qMultiItems').innerHTML=''; return; }
     panel.classList.remove('view-hidden');
     const total=multiItems.reduce((s,x)=>s+x.importe,0);
     $('qMultiItems').innerHTML = multiItems.map((it,i)=>
-      '<div class="qm-row"><span class="qm-cat">'+(EMO[it.categoria]||'')+' '+escapeHtml(shortCat(it.categoria))+'</span>'+
+      '<div class="qm-row"><span class="qm-cat">'+(EMO[it.categoria]||'')+' '+escapeHtml(shortCat(it.categoria))+
+      ' <span style="color:var(--muted);font-weight:400">· '+ddmm(it.fecha)+(it.concepto?' · '+escapeHtml(it.concepto):'')+'</span></span>'+
       '<span class="qm-amt">'+eur(it.importe)+'</span>'+
       '<button class="qm-del" data-i="'+i+'">✕</button></div>'
     ).join('') + '<div class="qm-total"><span>'+multiItems.length+' cuota'+(multiItems.length===1?'':'s')+'</span><span>'+eur(total)+'</span></div>';
@@ -898,18 +965,17 @@
     if(!multiItems.length) return;
     $('qMultiSave').disabled=true;
     try{
-      const prefSel=(qDateIso||todayIso()).slice(0,7);
       const data=DL.cached();
       const yaExisten=new Set();
-      if(data) data.rows.forEach(r=>{ if(r.concepto==='(anulado)')return; if(!(r.fecha||'').startsWith(prefSel))return; yaExisten.add((r.categoria||'')+'||'+String(r.concepto||'').trim().toLowerCase()); });
+      if(data) data.rows.forEach(r=>{ if(r.concepto==='(anulado)')return; yaExisten.add((r.fecha||'').slice(0,7)+'||'+(r.categoria||'')+'||'+String(r.concepto||'').trim().toLowerCase()); });
       const aEnviar=[], omitidos=[];
       multiItems.forEach(it=>{
-        const key=it.categoria+'||'+String(it.concepto||'').trim().toLowerCase();
+        const key=(it.fecha||'').slice(0,7)+'||'+it.categoria+'||'+String(it.concepto||'').trim().toLowerCase();
         (yaExisten.has(key)?omitidos:aEnviar).push(it);
       });
-      if(!aEnviar.length){ toast('Esas cuotas ya estaban registradas este mes'); multiItems=[]; renderMultiList(); return; }
-      const r=await postJSON(cfg().webapp, payload({ action:'quick-batch', persona:cfg().persona, fecha:qDateIso||todayIso(),
-        items:aEnviar.map(it=>({importe:it.importe,categoria:it.categoria,concepto:it.concepto})) }));
+      if(!aEnviar.length){ toast('Esas cuotas ya estaban registradas en su mes'); multiItems=[]; renderMultiList(); return; }
+      const r=await postJSON(cfg().webapp, payload({ action:'quick-batch', persona:cfg().persona,
+        items:aEnviar.map(it=>({importe:it.importe,categoria:it.categoria,concepto:it.concepto,fecha:it.fecha})) }));
       if(!r.ok) throw new Error(r.error);
       (r.resultados||[]).forEach(res=>{ if(res.ok) DL.patchAdd(res); });
       const okCount=(r.resultados||[]).filter(x=>x.ok).length;
