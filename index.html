@@ -198,15 +198,15 @@
   .q-pad button:active{background:var(--surface-2);transform:scale(.97)}
   #qDel{color:var(--muted)}
   .q-hint{text-align:center;color:var(--muted);font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
-  .q-cats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-  .q-cat{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  .q-cats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .q-cat{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
     background:var(--surface);border:1px solid var(--border);color:var(--text);
-    padding:10px 5px;border-radius:14px;cursor:pointer;font-size:12px;font-weight:600;min-height:66px;min-width:0}
+    padding:8px 3px;border-radius:12px;cursor:pointer;font-size:10.5px;font-weight:600;min-height:56px;min-width:0}
   .q-cat:active{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);transform:scale(.97)}
-  .q-cat .emo{font-size:23px;line-height:1;flex:none}
+  .q-cat .emo{font-size:19px;line-height:1;flex:none}
   .q-cat .lbl{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
   .q-cat.more{border-style:dashed;color:var(--muted)}
-  .q-cat.more .emo{font-size:19px}
+  .q-cat.more .emo{font-size:16px}
   .q-flash{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) scale(.9);background:var(--green);color:#04231a;
     padding:18px 26px;border-radius:18px;font-weight:700;font-size:18px;z-index:50;opacity:0;transition:.18s;pointer-events:none;text-align:center}
   .q-flash.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
@@ -806,7 +806,8 @@
   // ======================================================
   //  MODO RÁPIDO (teclado + confirmación)
   // ======================================================
-  const DEFAULT_QUICK = ['Alimentación','Café/cañas/Desayunos','Gasolina/Transporte','Comidas/Cenas restaurantes','Compras/Ropa/Estética','Niños','Ocio/Regalos/Juego','Otros gastos'];
+  const DEFAULT_QUICK = ['Alimentación','Café/cañas/Desayunos','Gasolina/Transporte','Comidas/Cenas restaurantes','Compras/Ropa/Estética','Niños','Ocio/Regalos/Juego','Otros gastos','Gato','Móvil/Internet','Limpieza'];
+  const QUICK_N = 11;
   let qAmt='', qDateIso=null, qPendingCat=null;
   function todayIso(){ const n=new Date(); return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0'); }
   function qValue(){ return parseFloat((qAmt||'').replace(',','.'))||0; }
@@ -822,17 +823,25 @@
   $('quickDate').addEventListener('change',function(){ if(this.value){ qDateIso=this.value; setQDateLabel(); } });
 
   function catsAprendidas(){
-    const rows=(DL.cached()&&DL.cached().rows)||[]; const cont={};
+    const rows=(DL.cached()&&DL.cached().rows)||[];
+    if(!rows.length){
+      const cached=store.get('catsCache');
+      if(cached){ try{ const p=JSON.parse(cached); if(p&&p.length) return p; }catch(e){} }
+      return DEFAULT_QUICK.slice(0,QUICK_N);
+    }
+    const cont={};
     rows.forEach(r=>{ if(INGRESO_CATS.includes(r.categoria))return; if(r.concepto==='(anulado)')return; if(!r.categoria)return; cont[r.categoria]=(cont[r.categoria]||0)+1; });
-    const orden=Object.keys(cont).sort((a,b)=>cont[b]-cont[a]); const top=orden.slice(0,8);
-    for(const d of DEFAULT_QUICK){ if(top.length>=8)break; if(!top.includes(d)) top.push(d); }
-    return top.slice(0,8);
+    const orden=Object.keys(cont).sort((a,b)=>cont[b]-cont[a]); const top=orden.slice(0,QUICK_N);
+    for(const d of DEFAULT_QUICK){ if(top.length>=QUICK_N)break; if(!top.includes(d)) top.push(d); }
+    const result=top.slice(0,QUICK_N);
+    store.set('catsCache', JSON.stringify(result));
+    return result;
   }
   const SHORT = {
     'Alimentación':'Comida','Café/cañas/Desayunos':'Café','Gasolina/Transporte':'Transporte',
     'Comidas/Cenas restaurantes':'Restaurante','Compras/Ropa/Estética':'Compras','Niños':'Niños',
     'Ocio/Regalos/Juego':'Ocio','Otros gastos':'Otros','Hipoteca/Alquiler':'Casa','Muebles/Menaje':'Hogar',
-    'Móvil/Internet':'Móvil','Luz':'Luz','Gas':'Gas','Agua':'Agua','Gato':'Gato','Otros gastos coche':'Coche',
+    'Móvil/Internet':'Móvil','Luz':'Luz','Gas':'Gas','Agua':'Agua','Gato':'Gato','Otros gastos coche':'Otros Coche',
     'Seguros':'Seguros','Impuestos/Tasas/multas':'Impuestos','Matriculas/cuotas':'Cuotas','Viajes/Hoteles':'Viajes',
     'Pérdidas patrimoniales':'Pérdidas','Varios invitaciones casa':'Invitados','Limpieza':'Limpieza',
     'Nóminas':'Nómina','Ingresos extraordinarios':'Ingreso'
@@ -882,8 +891,8 @@
     $('qPerson').textContent='· '+(cfg().persona||'');
     if(!qDateIso) qDateIso=todayIso();
     setQDateLabel(); renderQAmount();
-    if(DL.cached()) renderQuickCats(); else $('qCats').innerHTML='<div class="dash-empty" style="grid-column:1/-1;padding:14px">Cargando…</div>';
-    await DL.refresh(); renderQuickCats();
+    renderQuickCats(); // instantáneo: caché de sesión, o de localStorage/DEFAULT_QUICK si es la primera carga
+    await DL.refresh(); renderQuickCats(); // reconcilia con las categorías realmente aprendidas
   }
 
   // prevYear -> guarda en DL._prev para renderDashboard
