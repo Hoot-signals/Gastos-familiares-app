@@ -198,6 +198,12 @@
   .q-pad button:active{background:var(--surface-2);transform:scale(.97)}
   #qDel{color:var(--muted)}
   .q-hint{text-align:center;color:var(--muted);font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+  .q-date.active{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+  .qm-row{display:flex;align-items:center;gap:8px;padding:9px 11px;background:var(--surface);border:1px solid var(--border);border-radius:12px;margin-bottom:6px;font-size:14px}
+  .qm-row .qm-cat{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qm-row .qm-amt{font-family:'JetBrains Mono',monospace;font-weight:700}
+  .qm-row .qm-del{background:none;border:none;color:var(--muted);font-size:17px;font-weight:700;cursor:pointer;padding:2px 6px;line-height:1}
+  .qm-total{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:2px 3px 10px;font-weight:600}
   .q-cats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
   .q-cat{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
     background:var(--surface);border:1px solid var(--border);color:var(--text);
@@ -273,7 +279,10 @@
   <main id="quick">
     <div class="q-top">
       <span class="q-person" id="qPerson">—</span>
-      <button class="q-date" id="qDateBtn">Hoy</button>
+      <div style="display:flex;gap:6px">
+        <button class="q-date" id="qMultiToggle" title="Añadir varias cuotas seguidas">🧾</button>
+        <button class="q-date" id="qDateBtn">Hoy</button>
+      </div>
     </div>
     <div class="q-amount" id="qAmount">0<span class="q-cur">€</span></div>
     <div class="q-pad" id="qPad">
@@ -282,7 +291,11 @@
       <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
       <button data-k=",">,</button><button data-k="0">0</button><button data-k="del" id="qDel">⌫</button>
     </div>
-    <div class="q-hint">Toca una categoría para guardar</div>
+    <div class="q-hint" id="qHint">Toca una categoría para guardar</div>
+    <div id="qMultiPanel" class="view-hidden">
+      <div id="qMultiItems"></div>
+      <button class="save-cfg" id="qMultiSave" style="margin:0 0 12px;padding:12px">Guardar todas</button>
+    </div>
     <div class="q-cats" id="qCats"></div>
   </main>
 
@@ -343,9 +356,6 @@
       <label>Enlace del Google Sheet del año</label>
       <input type="text" id="cfgSheet" placeholder="https://docs.google.com/spreadsheets/d/…" autocapitalize="off" autocorrect="off">
 
-      <label>Enlace del Sheet del año anterior <span class="opt">(opcional, para comparar YoY)</span></label>
-      <input type="text" id="cfgSheetPrev" placeholder="https://docs.google.com/spreadsheets/d/…" autocapitalize="off" autocorrect="off">
-
       <label>Palabra secreta <span class="opt">(la misma que pusiste en el script)</span></label>
       <input type="password" id="cfgToken" placeholder="casa2026xk" autocapitalize="off" autocorrect="off">
 
@@ -397,7 +407,6 @@
   const cfg = () => ({
     webapp: store.get('webapp') || '',
     sheet:  store.get('sheet')  || '',
-    sheetPrev: store.get('sheetPrev') || '',
     token:  store.get('token')  || '',
     persona:store.get('persona')|| 'Miguel'
   });
@@ -408,7 +417,6 @@
   function openSettings(){
     const c = cfg();
     $('cfgWebapp').value=c.webapp; $('cfgSheet').value=c.sheet; $('cfgToken').value=c.token;
-    $('cfgSheetPrev').value=c.sheetPrev;
     setPersonaUI(c.persona);
     $('overlay').classList.add('open');
   }
@@ -431,7 +439,6 @@
   $('saveCfg').onclick = () => {
     store.set('webapp', $('cfgWebapp').value.trim());
     store.set('sheet',  $('cfgSheet').value.trim());
-    store.set('sheetPrev', $('cfgSheetPrev').value.trim());
     store.set('token',  $('cfgToken').value.trim());
     store.set('persona', personaSel || 'Miguel');
     $('overlay').classList.remove('open');
@@ -471,7 +478,6 @@
   // ======================================================
   const DL = (() => {
     let mem = null, inflight = null;
-    const prevCache = {}; // {sheetId: monthly}
     function load(){ return mem; }                 // solo memoria (sesión); nada persistido
     function save(d){ mem = d; }
     function cached(){ return mem; }
@@ -486,7 +492,7 @@
         const url = c.webapp + '?token=' + encodeURIComponent(c.token) + '&sheetId=' + encodeURIComponent(sheetIdFrom(c.sheet)) + '&_=' + Date.now();
         const res = await fetch(url, { cache: 'no-store' });
         const d = await res.json();
-        if (d.ok) { lastError = null; save({ rows:d.rows||[], monthly:d.monthly, registroGid:d.registroGid, lastRow:d.lastRow, at:Date.now() }); }
+        if (d.ok) { lastError = null; save({ rows:d.rows||[], prevYear:d.prevYear||null, at:Date.now() }); }
         else { lastError = d.error || 'Error del servidor'; }
         return mem;
       })().catch((e)=>{ lastError = 'Sin conexión con el servidor'; return mem; }).finally(()=> inflight=null);
@@ -497,18 +503,7 @@
     function patchAdd(r){ const d=load(); if(!d) return; d.rows.push({fecha:r.fecha,importe:r.importe,categoria:r.categoria,concepto:r.concepto||'',persona:r.persona||'',id:r.id,creado:new Date().toISOString().slice(0,19)}); save(d); }
     function patchUpdate(id, f){ const d=load(); if(!d) return; const x=d.rows.find(r=>String(r.id)===String(id)); if(x) Object.assign(x,f); save(d); }
     function rowById(id){ const d=load(); return d? d.rows.find(r=>String(r.id)===String(id)) : null; }
-    async function prevYear(){
-      const c=cfg(); if(!c.sheetPrev) return null;
-      const sid=sheetIdFrom(c.sheetPrev); if(!sid) return null;
-      if(prevCache[sid]) return prevCache[sid];
-      try{
-        const url=c.webapp+'?token='+encodeURIComponent(c.token)+'&mode=grid&sheetId='+encodeURIComponent(sid)+'&_='+Date.now();
-        const d=await (await fetch(url, { cache: 'no-store' })).json();
-        if(d.ok){ prevCache[sid]=d.monthly; return d.monthly; }
-      }catch(e){}
-      return null;
-    }
-    return { cached, refresh, ensure, patchAdd, patchUpdate, rowById, prevYear, getError };
+    return { cached, refresh, ensure, patchAdd, patchUpdate, rowById, getError };
   })();
 
   const INGRESO_CATS = ['Nóminas','Ingresos extraordinarios'];
@@ -553,7 +548,6 @@
       if($('dash').classList.contains('view-hidden')) return;
       if(DL.cached()) renderDashboard(); else $('dashBody').innerHTML = errorBox();
     });
-    DL.prevYear().then(p=>{ if(p) DL._prev=p; if(!$('dash').classList.contains('view-hidden')) renderDashboard(); });
   }
 
   // Mensaje de error/estado cuando no hay datos (típico: mala config en Ajustes)
@@ -614,7 +608,7 @@
   function renderDashboard(){
     const data = DL.cached(); if(!data){ $('dashBody').innerHTML = (DL.getError()? errorBox() : skel(4)); return; }
     const monthly = computeMonthly(data.rows);   // reactivo: se recalcula tras cada edición
-    const prev = DL._prev || null;
+    const prev = data.prevYear || null;          // año anterior: pestaña "Global Año" del mismo Sheet
     let html = '';
     if(DL.getError() && DL.getError()!=='sin-config') html += '<div class="stale-note">⚠ Sin conexión — datos en caché, puede que no estén al día</div>';
     const {y,m} = dashMonth;
@@ -638,9 +632,17 @@
     const gYTD=sumHasta(monthly.gastos,m), iYTD=sumHasta(monthly.ingresos,m);
     const aYTD=iYTD-gYTD, tYTD=iYTD>0?aYTD/iYTD*100:0;
 
+    // La comparativa YoY solo tiene sentido entre periodos igual de "completos".
+    // Si el mes mostrado es el mes en curso (parcial), comparamos hasta el último
+    // mes ya cerrado en vez de hasta hoy, para no comparar 8 días de julio con
+    // los 31 días de julio del año pasado.
+    const mComparable = esMesActual ? m-1 : m;
     let yoy=null;
-    if(prev){ const gp=sumHasta(prev.gastos,m), ip=sumHasta(prev.ingresos,m), ap=ip-gp;
-      yoy={ dGastos: gp>0?(gYTD-gp)/gp*100:null, dAhorro: Math.abs(ap)>0?(aYTD-ap)/Math.abs(ap)*100:null }; }
+    if(prev && mComparable>=0){
+      const gYTDc=sumHasta(monthly.gastos,mComparable), iYTDc=sumHasta(monthly.ingresos,mComparable), aYTDc=iYTDc-gYTDc;
+      const gp=sumHasta(prev.gastos,mComparable), ip=sumHasta(prev.ingresos,mComparable), ap=ip-gp;
+      yoy={ dGastos: gp>0?(gYTDc-gp)/gp*100:null, dAhorro: Math.abs(ap)>0?(aYTDc-ap)/Math.abs(ap)*100:null, hastaMes:mComparable };
+    }
 
     html+='<div class="stats">';
     html+=stat('Ingresos',eur(ingresos))+stat('Gastos',eur(gastos));
@@ -664,10 +666,11 @@
     html+=stat('Ahorro YTD',eur(aYTD),aYTD>=0?'good':'bad')+stat('Tasa YTD',iYTD>0?tYTD.toFixed(0)+'%':'—',tYTD>=0?'good':'bad');
     html+='</div>';
 
-    if(yoy){ html+='<div class="sec-title" style="margin-top:14px">vs año anterior (mismo periodo)</div><div class="stats">';
+    if(yoy){ const etiqueta=esMesActual?' <span style="text-transform:none;font-weight:400">· hasta '+MESES_ES[yoy.hastaMes]+' cerrado</span>':'';
+      html+='<div class="sec-title" style="margin-top:14px">vs año anterior (mismo periodo)'+etiqueta+'</div><div class="stats">';
       html+=statDelta('Gastos YTD',yoy.dGastos,true)+statDelta('Ahorro YTD',yoy.dAhorro,false); html+='</div>'; }
-    else if(cfg().sheetPrev) html+='<div class="dash-empty" style="padding:14px">Año anterior sin datos legibles.</div>';
-    else html+='<div class="dash-empty" style="padding:14px">Añade el Sheet del año anterior en Ajustes para la comparativa YoY.</div>';
+    else if(esMesActual && m===0) html+='<div class="dash-empty" style="padding:14px">Aún no hay ningún mes cerrado este año para comparar.</div>';
+    else html+='<div class="dash-empty" style="padding:14px">No se encontró la pestaña "Global Año" (con los totales del año anterior) en tu Sheet.</div>';
 
     // Insights
     const insights=[];
@@ -853,14 +856,70 @@
     let html = cats.map(c=>'<button class="q-cat" data-cat="'+c.replace(/"/g,'&quot;')+'"><span class="emo">'+(EMO[c]||'•')+'</span><span class="lbl">'+escapeHtml(shortCat(c))+'</span></button>').join('');
     html += '<button class="q-cat more" id="qMoreTile"><span class="emo">➕</span><span class="lbl">Más</span></button>';
     $('qCats').innerHTML = html;
-    $('qCats').querySelectorAll('.q-cat[data-cat]').forEach(b=> b.addEventListener('click', ()=> abrirConfirm(b.dataset.cat)));
+    $('qCats').querySelectorAll('.q-cat[data-cat]').forEach(b=> b.addEventListener('click', ()=> onCatTap(b.dataset.cat)));
     $('qMoreTile').addEventListener('click', abrirMas);
   }
   function abrirMas(){
     const inner=$('pickerInner'); inner.innerHTML='<div class="ph">Elegir categoría</div>';
-    CATEGORIAS.forEach(cat=>{ const o=document.createElement('div'); o.className='cat-opt'; o.textContent=(EMO[cat]?EMO[cat]+'  ':'')+cat; o.onclick=()=>{ $('picker').classList.remove('open'); abrirConfirm(cat); }; inner.appendChild(o); });
+    CATEGORIAS.forEach(cat=>{ const o=document.createElement('div'); o.className='cat-opt'; o.textContent=(EMO[cat]?EMO[cat]+'  ':'')+cat; o.onclick=()=>{ $('picker').classList.remove('open'); onCatTap(cat); }; inner.appendChild(o); });
     $('picker').classList.add('open');
   }
+  function onCatTap(cat){ if(multiMode) addToMulti(cat); else abrirConfirm(cat); }
+
+  // ---- Modo "varias cuotas seguidas": acumula apuntes y los guarda todos de una vez ----
+  let multiMode=false, multiItems=[];
+  $('qMultiToggle').addEventListener('click', ()=>{
+    if(multiMode && multiItems.length && !confirm('¿Salir sin guardar? Se perderá la lista de cuotas pendiente.')) return;
+    multiMode=!multiMode;
+    $('qMultiToggle').classList.toggle('active', multiMode);
+    $('qHint').textContent = multiMode ? 'Toca cada cuota para añadirla a la lista' : 'Toca una categoría para guardar';
+    if(!multiMode){ multiItems=[]; }
+    renderMultiList();
+  });
+  function addToMulti(cat){
+    const val=qValue(); if(!(Math.abs(val)>0)){ toast('Escribe un importe'); return; }
+    multiItems.push({categoria:cat, importe:val, concepto:''});
+    qAmt=''; renderQAmount();
+    renderMultiList();
+  }
+  function renderMultiList(){
+    const panel=$('qMultiPanel');
+    if(!multiMode || !multiItems.length){ panel.classList.add('view-hidden'); $('qMultiItems').innerHTML=''; return; }
+    panel.classList.remove('view-hidden');
+    const total=multiItems.reduce((s,x)=>s+x.importe,0);
+    $('qMultiItems').innerHTML = multiItems.map((it,i)=>
+      '<div class="qm-row"><span class="qm-cat">'+(EMO[it.categoria]||'')+' '+escapeHtml(shortCat(it.categoria))+'</span>'+
+      '<span class="qm-amt">'+eur(it.importe)+'</span>'+
+      '<button class="qm-del" data-i="'+i+'">✕</button></div>'
+    ).join('') + '<div class="qm-total"><span>'+multiItems.length+' cuota'+(multiItems.length===1?'':'s')+'</span><span>'+eur(total)+'</span></div>';
+    $('qMultiItems').querySelectorAll('.qm-del').forEach(b=> b.addEventListener('click', ()=>{ multiItems.splice(+b.dataset.i,1); renderMultiList(); }));
+  }
+  $('qMultiSave').addEventListener('click', async ()=>{
+    if(!multiItems.length) return;
+    $('qMultiSave').disabled=true;
+    try{
+      const prefSel=(qDateIso||todayIso()).slice(0,7);
+      const data=DL.cached();
+      const yaExisten=new Set();
+      if(data) data.rows.forEach(r=>{ if(r.concepto==='(anulado)')return; if(!(r.fecha||'').startsWith(prefSel))return; yaExisten.add((r.categoria||'')+'||'+String(r.concepto||'').trim().toLowerCase()); });
+      const aEnviar=[], omitidos=[];
+      multiItems.forEach(it=>{
+        const key=it.categoria+'||'+String(it.concepto||'').trim().toLowerCase();
+        (yaExisten.has(key)?omitidos:aEnviar).push(it);
+      });
+      if(!aEnviar.length){ toast('Esas cuotas ya estaban registradas este mes'); multiItems=[]; renderMultiList(); return; }
+      const r=await postJSON(cfg().webapp, payload({ action:'quick-batch', persona:cfg().persona, fecha:qDateIso||todayIso(),
+        items:aEnviar.map(it=>({importe:it.importe,categoria:it.categoria,concepto:it.concepto})) }));
+      if(!r.ok) throw new Error(r.error);
+      (r.resultados||[]).forEach(res=>{ if(res.ok) DL.patchAdd(res); });
+      const okCount=(r.resultados||[]).filter(x=>x.ok).length;
+      multiItems=[];
+      multiMode=false; $('qMultiToggle').classList.remove('active'); $('qHint').textContent='Toca una categoría para guardar';
+      renderMultiList(); renderQuickCats();
+      toast(okCount+' cuota'+(okCount===1?'':'s')+' guardada'+(okCount===1?'':'s')+(omitidos.length?' · '+omitidos.length+' ya existían':''));
+    }catch(err){ toast('No se pudo guardar: '+(err.message||err)); }
+    finally{ $('qMultiSave').disabled=false; }
+  });
 
   function abrirConfirm(cat){
     const val=qValue(); if(!(Math.abs(val)>0)){ toast('Escribe un importe'); return; }
@@ -895,8 +954,6 @@
     await DL.refresh(); renderQuickCats(); // reconcilia con las categorías realmente aprendidas
   }
 
-  // prevYear -> guarda en DL._prev para renderDashboard
-  DL.prevYear().then(p=>{ if(p) DL._prev=p; });
   // Arranca en "Rápido" (pantalla principal)
   if(cfg().webapp && cfg().sheet) enterQuick();
   // prefetch al arrancar (tras primer render): calienta la caché
