@@ -449,6 +449,22 @@
   let toastT;
   function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2200); }
 
+  // Añade el token y el sheetId (los mismos que usan las peticiones GET) a cualquier acción de escritura
+  function payload(extra){
+    const c = cfg();
+    return Object.assign({ token: c.token, sheetId: sheetIdFrom(c.sheet) }, extra);
+  }
+  // POST a la Web App de Apps Script. Content-Type text/plain evita el preflight
+  // CORS que Apps Script no gestiona; el propio script hace JSON.parse del body.
+  async function postJSON(url, data){
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(data)
+    });
+    return res.json();
+  }
+
   // ======================================================
   //  CAPA DE DATOS (caché + stale-while-revalidate)
   //  Una sola fuente para Rápido, Actividad y Análisis.
