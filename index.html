@@ -46,6 +46,8 @@
   /* Settings sheet */
   .overlay{position:fixed;top:0;left:0;right:0;height:var(--app-vh, 100dvh);background:rgba(0,0,0,.55);display:none;z-index:40}
   .overlay.open{display:block}
+  /* Pantalla de PIN: opaca (no deja intuir contenido detrás) y por encima de cualquier otra hoja */
+  #lockScreen{background:var(--bg);z-index:100}
   .sheet{
     position:absolute;left:0;right:0;bottom:0;background:var(--surface);
     border-radius:20px 20px 0 0;padding:20px 20px calc(24px + var(--safe-b));
@@ -323,8 +325,32 @@
       </div>
       <input type="text" id="cfgPersonaOther" placeholder="…o escribe otro nombre" style="margin-top:8px" autocapitalize="words">
 
+      <label style="margin-top:18px">Bloqueo con PIN <span class="opt">(solo en este móvil)</span></label>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="save-cfg" id="pinBtn" style="margin:0;flex:1;padding:12px;font-size:14px">Activar PIN</button>
+        <button type="button" class="qc-cancel view-hidden" id="pinRemove" style="margin:0;flex:none;width:auto;padding:12px 16px;font-size:13px;border-radius:12px;font-weight:600">Quitar</button>
+      </div>
+      <p class="cfg-hint" id="pinHint">Sin PIN: cualquiera que abra este móvil ve la app directamente.</p>
+
       <button class="save-cfg" id="saveCfg">Guardar</button>
       <p class="cfg-hint">El enlace del Sheet cambia cada año; la URL de la Web App y la palabra secreta se quedan fijas.</p>
+    </div>
+  </div>
+
+  <!-- Bloqueo por PIN: se muestra al abrir la app si hay un PIN activo en este móvil -->
+  <div class="overlay" id="lockScreen">
+    <div style="min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center">
+      <div style="font-size:36px">🔒</div>
+      <h2 style="margin:8px 0 2px">Gastos bloqueado</h2>
+      <p class="sub" style="margin:0 0 16px">Introduce el PIN de este móvil</p>
+      <div id="lockDots" style="font-size:28px;letter-spacing:14px;font-family:'JetBrains Mono',monospace;min-height:34px">○○○○</div>
+      <div class="q-pad" id="lockPad" style="width:100%;max-width:280px;margin-top:18px">
+        <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+        <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+        <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+        <button data-k="c">C</button><button data-k="0">0</button><button data-k="del">⌫</button>
+      </div>
+      <button class="qc-cancel" id="lockReset" style="flex:none;margin-top:26px;width:100%;max-width:280px">He olvidado el PIN</button>
     </div>
   </div>
 
@@ -362,7 +388,48 @@
     set(k,v){ try{ localStorage.setItem(k,v); }catch(e){ mem[k]=v; } }
   };
 
-  const CATEGORIAS = ['Hipoteca/Alquiler','Muebles/Menaje','Alimentación','Niños',
+  // -------- bloqueo por PIN --------
+  // Cifra webapp/sheet/token con AES-GCM (clave derivada del PIN vía PBKDF2).
+  // El PIN es por móvil: cada persona lo configura en su propio dispositivo.
+  const Lock = (() => {
+    const K_SALT='pinSalt', K_ENC='cfgEnc', K_IV='cfgIv';
+    const te=new TextEncoder(), td=new TextDecoder();
+    const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const fromB64 = s => Uint8Array.from(atob(s), c=>c.charCodeAt(0));
+    function hasPin(){ return !!store.get(K_SALT); }
+    async function deriveKey(pin, saltB64){
+      const base = await crypto.subtle.importKey('raw', te.encode(pin), 'PBKDF2', false, ['deriveKey']);
+      return crypto.subtle.deriveKey(
+        { name:'PBKDF2', salt:fromB64(saltB64), iterations:150000, hash:'SHA-256' },
+        base, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']
+      );
+    }
+    async function reencrypt(key, data){
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, te.encode(JSON.stringify(data)));
+      store.set(K_ENC, toB64(ct)); store.set(K_IV, toB64(iv));
+    }
+    async function setup(pin, data){
+      const saltB64 = toB64(crypto.getRandomValues(new Uint8Array(16)));
+      const key = await deriveKey(pin, saltB64);
+      store.set(K_SALT, saltB64);
+      await reencrypt(key, data);
+      return { key };
+    }
+    async function unlock(pin){
+      const saltB64=store.get(K_SALT), ivB64=store.get(K_IV), ctB64=store.get(K_ENC);
+      if(!saltB64||!ivB64||!ctB64) throw new Error('sin-pin');
+      const key = await deriveKey(pin, saltB64);
+      const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv:fromB64(ivB64)}, key, fromB64(ctB64));
+      return { data: JSON.parse(td.decode(pt)), key };
+    }
+    function clear(){ [K_SALT,K_ENC,K_IV].forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} }); }
+    return { hasPin, setup, reencrypt, unlock, clear };
+  })();
+  // Secretos descifrados en memoria SOLO durante esta sesión (nunca en localStorage en claro si hay PIN)
+  let sessionSecrets = null, sessionKey = null;
+
+  const CATEGORIAS =['Hipoteca/Alquiler','Muebles/Menaje','Alimentación','Niños',
     'Compras/Ropa/Estética','Móvil/Internet','Luz','Gas','Agua','Gato',
     'Gasolina/Transporte','Otros gastos coche','Seguros','Impuestos/Tasas/multas',
     'Matriculas/cuotas','Café/cañas/Desayunos','Comidas/Cenas restaurantes',
@@ -373,9 +440,9 @@
   const $ = (id) => document.getElementById(id);
 
   const cfg = () => ({
-    webapp: store.get('webapp') || '',
-    sheet:  store.get('sheet')  || '',
-    token:  store.get('token')  || '',
+    webapp: (sessionSecrets && sessionSecrets.webapp) || store.get('webapp') || '',
+    sheet:  (sessionSecrets && sessionSecrets.sheet)  || store.get('sheet')  || '',
+    token:  (sessionSecrets && sessionSecrets.token)  || store.get('token')  || '',
     persona:store.get('persona')|| 'Miguel'
   });
   const sheetIdFrom = (url) => { const m = (url||'').match(/\/d\/([a-zA-Z0-9_-]+)/); return m ? m[1] : ''; };
@@ -386,8 +453,37 @@
     const c = cfg();
     $('cfgWebapp').value=c.webapp; $('cfgSheet').value=c.sheet; $('cfgToken').value=c.token;
     setPersonaUI(c.persona);
+    updatePinUI();
     $('overlay').classList.add('open');
   }
+  function updatePinUI(){
+    const has = Lock.hasPin();
+    $('pinBtn').textContent = has ? 'Cambiar PIN' : 'Activar PIN';
+    $('pinHint').textContent = has
+      ? 'PIN activo en este móvil — se pide solo al abrir la app.'
+      : 'Sin PIN: cualquiera que abra este móvil ve la app directamente.';
+    $('pinRemove').classList.toggle('view-hidden', !has);
+  }
+  $('pinBtn').addEventListener('click', async () => {
+    const pin = prompt('Nuevo PIN (4 dígitos):'); if(pin===null) return;
+    if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser numérico, de 4 dígitos'); return; }
+    const again = prompt('Repite el PIN:'); if(again!==pin){ toast('Los PIN no coinciden'); return; }
+    const data = { webapp:$('cfgWebapp').value.trim(), sheet:$('cfgSheet').value.trim(), token:$('cfgToken').value.trim() };
+    const { key } = await Lock.setup(pin, data);
+    sessionKey = key; sessionSecrets = data;
+    try{ localStorage.removeItem('webapp'); localStorage.removeItem('sheet'); localStorage.removeItem('token'); }catch(e){}
+    updatePinUI();
+    toast('PIN activado');
+  });
+  $('pinRemove').addEventListener('click', () => {
+    if(!Lock.hasPin()) return;
+    if(!confirm('¿Quitar el PIN? La palabra secreta quedará guardada sin cifrar en este móvil.')) return;
+    const data = sessionSecrets || cfg();
+    store.set('webapp', data.webapp); store.set('sheet', data.sheet); store.set('token', data.token);
+    Lock.clear(); sessionKey=null; sessionSecrets=null;
+    updatePinUI();
+    toast('PIN eliminado');
+  });
   $('overlay').addEventListener('click',(e)=>{ if(e.target===$('overlay')) $('overlay').classList.remove('open'); });
 
   let personaSel = 'Miguel';
@@ -404,11 +500,17 @@
   $('cfgPersonaOther').addEventListener('input', function(){
     if(this.value.trim()){ personaSel=this.value.trim(); document.querySelectorAll('#segPersona button').forEach(x=>x.classList.remove('active')); }
   });
-  $('saveCfg').onclick = () => {
-    store.set('webapp', $('cfgWebapp').value.trim());
-    store.set('sheet',  $('cfgSheet').value.trim());
-    store.set('token',  $('cfgToken').value.trim());
+  $('saveCfg').onclick = async () => {
+    const webapp = $('cfgWebapp').value.trim(), sheet = $('cfgSheet').value.trim(), token = $('cfgToken').value.trim();
     store.set('persona', personaSel || 'Miguel');
+    if (Lock.hasPin()) {
+      // ya desbloqueado esta sesión: recifra con la misma clave, sin volver a pedir el PIN
+      if (!sessionKey) { toast('Desbloquea con tu PIN para poder guardar'); return; }
+      await Lock.reencrypt(sessionKey, { webapp, sheet, token });
+      sessionSecrets = { webapp, sheet, token };
+    } else {
+      store.set('webapp', webapp); store.set('sheet', sheet); store.set('token', token);
+    }
     $('overlay').classList.remove('open');
     toast('Ajustes guardados');
     DL.refresh().then(()=>{ enterQuick(); });
@@ -977,18 +1079,57 @@
     await DL.refresh(); renderQuickCats(); // reconcilia con las categorías realmente aprendidas
   }
 
-  // Arranca en "Rápido" (pantalla principal)
-  if(cfg().webapp && cfg().sheet) enterQuick();
-  // prefetch al arrancar (tras primer render): calienta la caché
-  setTimeout(()=>{ if(cfg().webapp && cfg().sheet) DL.refresh(); }, 300);
+  // -------- pantalla de bloqueo (PIN) --------
+  let lockPin = '';
+  function lockRender(){ $('lockDots').textContent = '●'.repeat(lockPin.length) + '○'.repeat(Math.max(0,4-lockPin.length)); }
+  function openLock(){ lockPin=''; lockRender(); $('lockScreen').classList.add('open'); }
+  $('lockPad').addEventListener('click', (e)=>{
+    const b=e.target.closest('button'); if(!b) return; const k=b.dataset.k;
+    if(k==='del'){ lockPin=lockPin.slice(0,-1); lockRender(); return; }
+    if(k==='c'){ lockPin=''; lockRender(); return; }
+    if(lockPin.length>=4) return;
+    lockPin+=k; lockRender();
+    if(lockPin.length===4) tryUnlock();
+  });
+  async function tryUnlock(){
+    const pin = lockPin;
+    try{
+      const { data, key } = await Lock.unlock(pin);
+      sessionSecrets = data; sessionKey = key;
+      $('lockScreen').classList.remove('open');
+      lockPin=''; lockRender();
+      startApp();
+    }catch(e){
+      lockPin=''; lockRender();
+      toast('PIN incorrecto');
+    }
+  }
+  $('lockReset').addEventListener('click', ()=>{
+    if(!confirm('Esto borrará el enlace, la palabra secreta y el PIN guardados en ESTE móvil. Tendrás que volver a introducirlos en Ajustes. Los datos del Sheet no se ven afectados. ¿Continuar?')) return;
+    Lock.clear();
+    try{ localStorage.removeItem('webapp'); localStorage.removeItem('sheet'); localStorage.removeItem('token'); }catch(e){}
+    sessionSecrets=null; sessionKey=null;
+    $('lockScreen').classList.remove('open');
+    startApp();
+    setTimeout(openSettings, 300);
+  });
 
-  // -------- service worker --------
+  // -------- arranque de la app (tras desbloquear, o directo si no hay PIN) --------
+  function startApp(){
+    if(cfg().webapp && cfg().sheet) enterQuick();
+    // prefetch al arrancar (tras primer render): calienta la caché
+    setTimeout(()=>{ if(cfg().webapp && cfg().sheet) DL.refresh(); }, 300);
+    // abre ajustes si es la primera vez
+    if(!cfg().webapp){ setTimeout(openSettings, 400); }
+  }
+
+  // -------- service worker (independiente del bloqueo) --------
   if('serviceWorker' in navigator){
     window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
   }
 
-  // abre ajustes si es la primera vez
-  if(!cfg().webapp){ setTimeout(openSettings, 400); }
+  if(Lock.hasPin()) openLock();
+  else startApp();
 </script>
 </body>
 </html>
