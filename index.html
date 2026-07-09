@@ -623,7 +623,7 @@
     if(val===null||val===undefined||isNaN(val)) return '<div class="stat"><div class="k">'+k+'</div><div class="v">—</div></div>';
     const bueno = subeMalo ? val<0 : val>0;
     const cls = val===0 ? '' : (bueno?'good':'bad');
-    const txt = esPuntos ? (val>=0?'+':'')+val.toFixed(1)+' pp' : (val>=0?'+':'-')+eur(Math.abs(val));
+    const txt = esPuntos ? (val>=0?'+':'')+val.toFixed(1)+'%' : (val>=0?'+':'-')+eur(Math.abs(val));
     return '<div class="stat'+(cls?' '+cls:'')+'"><div class="k">'+k+'</div><div class="v">'+txt+'</div></div>';
   }
 
@@ -651,25 +651,22 @@
     const dias=esMesActual?Math.max(1,hoy.getDate()):new Date(y,m+1,0).getDate();
     const medioDia=gastos/dias;
 
+    // Acumulado del año (YTD) normal: de enero al mes que se está viendo, incluido
+    // (si es el mes en curso, incluye lo que llevamos de él). Esto NO se recorta nunca.
     const gYTD=sumHasta(monthly.gastos,m), iYTD=sumHasta(monthly.ingresos,m);
     const aYTD=iYTD-gYTD, tYTD=iYTD>0?aYTD/iYTD*100:0;
 
-    // La comparativa YoY solo tiene sentido entre periodos igual de "completos".
-    // Si el mes mostrado es el mes en curso (parcial), comparamos hasta el último
-    // mes ya cerrado en vez de hasta hoy, para no comparar 8 días de julio con
-    // los 31 días de julio del año pasado.
-    const mComparable = esMesActual ? m-1 : m;
+    // La comparativa YoY usa siempre el mismo mes m (incluido, aunque esté en curso)
+    // para ambos años — el mismo criterio que el YTD normal de arriba.
     let yoy=null;
-    if(prev && mComparable>=0){
-      const gYTDc=sumHasta(monthly.gastos,mComparable), iYTDc=sumHasta(monthly.ingresos,mComparable), aYTDc=iYTDc-gYTDc;
-      const tYTDc=iYTDc>0?aYTDc/iYTDc*100:null;
-      const gp=sumHasta(prev.gastos,mComparable), ip=sumHasta(prev.ingresos,mComparable), ap=ip-gp;
+    if(prev){
+      const gp=sumHasta(prev.gastos,m), ip=sumHasta(prev.ingresos,m), ap=ip-gp;
       const tp=ip>0?ap/ip*100:null;
+      const dIng=iYTD-ip, dGas=gYTD-gp;
       yoy={
-        hastaMes:mComparable,
         prevGastos:gp, prevIngresos:ip, prevAhorro:ap, prevTasa:tp,
-        dIngresos: iYTDc-ip, dGastos: gYTDc-gp,
-        dTasa: (tYTDc!=null && tp!=null) ? (tYTDc-tp) : null
+        dIngresos: dIng, dGastos: dGas, dNeta: aYTD-ap,
+        dTasa: (iYTD>0 && tp!=null) ? (tYTD-tp) : null
       };
     }
 
@@ -695,16 +692,15 @@
     html+=stat('Ahorro YTD',eur(aYTD),aYTD>=0?'good':'bad')+stat('Tasa YTD',iYTD>0?tYTD.toFixed(0)+'%':'—',tYTD>=0?'good':'bad');
     html+='</div>';
 
-    if(yoy){ const etiqueta=esMesActual?' <span style="text-transform:none;font-weight:400">· hasta '+MESES_ES[yoy.hastaMes]+' cerrado</span>':'';
-      html+='<div class="sec-title" style="margin-top:14px">Año anterior (mismo periodo)'+etiqueta+'</div><div class="stats">';
+    if(yoy){
+      html+='<div class="sec-title" style="margin-top:14px">Año anterior (mismo periodo)</div><div class="stats">';
       html+=stat('Gastos YTD',eur(yoy.prevGastos))+stat('Ingresos YTD',eur(yoy.prevIngresos));
       html+=stat('Ahorro YTD',eur(yoy.prevAhorro),yoy.prevAhorro>=0?'good':'bad')+stat('Tasa YTD',yoy.prevTasa!=null?yoy.prevTasa.toFixed(0)+'%':'—',yoy.prevTasa!=null&&yoy.prevTasa>=0?'good':'bad');
       html+='</div>';
       html+='<div class="sec-title" style="margin-top:14px">Variación vs año anterior</div><div class="stats">';
       html+=statAbsDelta('Ingresos',yoy.dIngresos,false,false)+statAbsDelta('Gastos',yoy.dGastos,false,true);
-      html+=statAbsDelta('Tasa de ahorro',yoy.dTasa,true,false);
+      html+=statAbsDelta('Tasa de ahorro',yoy.dTasa,true,false)+statAbsDelta('Variación neta',yoy.dNeta,false,false);
       html+='</div>'; }
-    else if(esMesActual && m===0) html+='<div class="dash-empty" style="padding:14px">Aún no hay ningún mes cerrado este año para comparar.</div>';
     else html+='<div class="dash-empty" style="padding:14px">No se encontró la pestaña "Global Año" (con los totales del año anterior) en tu Sheet.</div>';
 
     // Insights
