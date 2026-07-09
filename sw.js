@@ -1,12 +1,14 @@
 // Service worker: "red primero" para el HTML (así las actualizaciones se ven
 // enseguida) y caché para el resto. Sube ESTE archivo junto con index.html.
-const CACHE = 'gastos-v7';
+const CACHE = 'gastos-v9';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
+  './vuox-icon.png',
+  './x-mark.png'
 ];
 
 self.addEventListener('install', (e) => {
