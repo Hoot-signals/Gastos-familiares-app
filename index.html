@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#10151C">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -102,7 +102,7 @@
   .btn.send{background:var(--accent);color:var(--accent-ink)}
   @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(229,118,95,.5)}50%{box-shadow:0 0 0 10px rgba(229,118,95,0)}}
   /* Settings sheet */
-  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;z-index:40}
+  .overlay{position:fixed;top:0;left:0;right:0;height:var(--app-vh, 100dvh);background:rgba(0,0,0,.55);display:none;z-index:40}
   .overlay.open{display:block}
   .sheet{
     position:absolute;left:0;right:0;bottom:0;background:var(--surface);
@@ -405,6 +405,18 @@
   <div class="toast" id="toast"></div>
 
 <script>
+  // -------- altura real visible (evita que el teclado tape los modales) --------
+  function setAppVh(){
+    const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    document.documentElement.style.setProperty('--app-vh', h + 'px');
+  }
+  setAppVh();
+  window.addEventListener('resize', setAppVh);
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', setAppVh);
+    window.visualViewport.addEventListener('scroll', setAppVh);
+  }
+
   // -------- almacenamiento seguro (localStorage con fallback en memoria) --------
   const mem = {};
   const store = {
