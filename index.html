@@ -674,10 +674,26 @@
   function sumHasta(arr,m){ let s=0; for(let i=0;i<=m;i++) s+=Number(arr[i])||0; return s; }
   function skel(n){ let s=''; for(let i=0;i<n;i++) s+='<div class="skel skel-card"></div>'; return s; }
 
+  // Redondea a un paso "bonito" (1/2/5 × potencia de 10) para las marcas del eje vertical
+  function niceStep(raw){
+    if(raw<=0) return 1;
+    const exp=Math.floor(Math.log10(raw)), f=raw/Math.pow(10,exp);
+    const nf = f<=1?1 : f<=2?2 : f<=5?5 : 10;
+    return nf*Math.pow(10,exp);
+  }
+  const numFmt = n => new Intl.NumberFormat('es-ES',{maximumFractionDigits:0,useGrouping:true}).format(n);
+
   function chartSVG(g, gPrev, selM){
-    const W=360,H=150,pT=10,pB=24,pL=8,pR=8, plotH=H-pT-pB, plotW=W-pL-pR, step=plotW/12, barW=step*0.5;
+    const W=360,H=150,pT=10,pB=24,pL=34,pR=8, plotH=H-pT-pB, plotW=W-pL-pR, step=plotW/12, barW=step*0.5;
     let max=1; for(let i=0;i<12;i++){ max=Math.max(max, g[i]||0, gPrev?(gPrev[i]||0):0); }
+    const tickStep=niceStep(max/4);
     let s='<svg viewBox="0 0 '+W+' '+H+'" width="100%" preserveAspectRatio="xMidYMid meet">';
+    // eje vertical: líneas guía y niveles discretos, sin llamar la atención
+    for(let v=tickStep; v<=max*1.001; v+=tickStep){
+      const ty=pT+(plotH-(v/max)*plotH);
+      s+='<line x1="'+pL+'" y1="'+ty.toFixed(1)+'" x2="'+(W-pR)+'" y2="'+ty.toFixed(1)+'" stroke="var(--border)" stroke-width="1"/>';
+      s+='<text x="'+(pL-6)+'" y="'+(ty+3).toFixed(1)+'" fill="var(--muted)" font-size="8" text-anchor="end" font-family="Inter">'+numFmt(v)+'</text>';
+    }
     for(let i=0;i<12;i++){
       const cx=pL+i*step+step/2, bh=(g[i]||0)/max*plotH, y=pT+(plotH-bh);
       const fillAttr=i===selM?'fill="var(--accent)"':'fill="var(--accent)" fill-opacity=".32"';
@@ -718,14 +734,11 @@
                   .map(k=>({cat:k,val:porCat[k]})).filter(x=>x.val>0).sort((a,b)=>b.val-a.val);
     const maxCat=ranking.length?ranking[0].val:0;
 
-    const hoy=new Date(), esMesActual=(y===hoy.getFullYear()&&m===hoy.getMonth());
-    const dias=esMesActual?Math.max(1,hoy.getDate()):new Date(y,m+1,0).getDate();
-    const medioDia=gastos/dias;
-
     // Acumulado del año (YTD) normal: de enero al mes que se está viendo, incluido
     // (si es el mes en curso, incluye lo que llevamos de él). Esto NO se recorta nunca.
     const gYTD=sumHasta(monthly.gastos,m), iYTD=sumHasta(monthly.ingresos,m);
     const aYTD=iYTD-gYTD, tYTD=iYTD>0?aYTD/iYTD*100:0;
+    const medioMes = gYTD/(m+1); // gasto medio mensual: media acumulada YTD (enero..mes visto)/nº de meses
 
     // La comparativa YoY usa siempre el mismo mes m (incluido, aunque esté en curso)
     // para ambos años — el mismo criterio que el YTD normal de arriba.
@@ -745,7 +758,7 @@
     html+=stat('Ingresos',eur(ingresos))+stat('Gastos',eur(gastos));
     html+=stat('Ahorro',eur(ahorro),ahorro>=0?'good':'bad');
     html+=stat('Tasa de ahorro',ingresos>0?tasa.toFixed(0)+'%':'—',tasa>=0?'good':'bad');
-    html+=stat('Gasto medio / día'+(esMesActual?' (en curso)':''),eur(medioDia),'','wide');
+    html+=stat('Gasto medio / mes (media YTD)',eur(medioMes),'','wide');
     html+='</div>';
 
     html+='<div class="sec-title">Gasto por categoría</div>';
