@@ -14,7 +14,7 @@ There is no `package.json`, build tool, linter, or test suite in this repo. Deve
 
 - **Local run**: serve the directory over HTTP (not `file://`, since the service worker requires a real origin), e.g. `npx serve .` or `python -m http.server`, then open `index.html`.
 - **Deploy**: upload/push `index.html`, `sw.js`, `manifest.json`, and the icon files as-is to the static host (e.g. GitHub Pages). Paths are root-relative (`scope: "./"` in the manifest), so the app must be served from the root of whatever path it's hosted at.
-- **Cache busting**: `sw.js` has a `CACHE` constant (currently `'gastos-v5'`) that must be bumped by hand whenever the asset list (`ASSETS`) or cached-asset content changes meaningfully — the service worker deletes any cache key that doesn't match `CACHE` on activate, so an unbumped version means clients may keep serving a stale cached icon/manifest (the HTML itself is network-first, see below, so it always updates).
+- **Cache busting**: `sw.js` has a `CACHE` constant (currently `'gastos-v7'`) that must be bumped by hand whenever the asset list (`ASSETS`) or cached-asset content changes meaningfully — the service worker deletes any cache key that doesn't match `CACHE` on activate, so an unbumped version means clients may keep serving a stale cached icon/manifest (the HTML itself is network-first, see below, so it always updates).
 
 ## Architecture
 
@@ -36,6 +36,12 @@ There is no `package.json`, build tool, linter, or test suite in this repo. Deve
 
 **Service worker (`sw.js`)** strategy: network-first for navigations and `index.html` itself (so app updates are picked up immediately), cache-first for everything else in `ASSETS` (icons, manifest), and an explicit bypass (`return` before `respondWith`) for any request whose hostname includes `script.google` or `googleusercontent` — backend calls are never cached or served offline.
 
+**PIN lock (`Lock` module)**: opt-in, per-device access restriction, since the app shows family expense data directly (more exposed than the old Sheets link, which required navigating to a document). A 4-digit PIN encrypts `{webapp, sheet, token}` in `localStorage` with AES-GCM (key derived via PBKDF2-SHA256, 150k iterations); with no PIN configured the app behaves exactly as before (plaintext config, no lock screen) — nothing changes for a device that never activates one.
+- `Lock.hasPin()` checks for a stored salt; `Lock.setup(pin, data)` / `Lock.unlock(pin)` / `Lock.reencrypt(key, data)` / `Lock.clear()` are the only entry points — never read `localStorage['cfgEnc']` etc. directly.
+- The lock screen (`#lockScreen`, gated by `Lock.hasPin()` at boot) only appears on a cold launch. Once unlocked, `sessionSecrets` (decrypted config) and `sessionKey` (the derived `CryptoKey`) live in plain JS variables for the rest of that page session — switching tabs or briefly backgrounding the PWA does not re-prompt, only a full reload/relaunch does.
+- Ajustes → "Guardar" re-encrypts with the cached `sessionKey` when a PIN is active, so the documented January Sheet-link rotation doesn't require re-entering the PIN. "Activar/Cambiar PIN" is the only action that derives a *new* key (needs the PIN typed twice). "Quitar" reverts to plaintext storage. "He olvidado el PIN" (on the lock screen) wipes the local encrypted config/PIN for that device only — it does not touch the Google Sheet.
+- Each phone sets its own PIN independently (localStorage isn't shared across devices); there's no coordination needed between Miguel's and Maribel's phones.
+
 # Gastos Familiares — contexto del proyecto
 
 ## Qué es
@@ -53,15 +59,12 @@ que sincroniza con Google Sheets. Sin frameworks: HTML/CSS/JS puro.
 ## Flujo de git (importante)
 - Este repo está conectado a Vercel: cualquier push a `main` se publica
   automáticamente en producción.
-- NUNCA trabajes directamente en `main`. Antes de cualquier cambio, crea
-  una rama nueva con nombre descriptivo (ej. `feature/nombre-del-cambio`)
-  y trabaja ahí.
-- Antes de aplicar cambios importantes, explica el impacto y espera mi
-  aprobación explícita.
-- Cuando yo apruebe, haz commit con un mensaje claro y push de la rama
-  (nunca de `main`).
-- NUNCA fusiones (merge) a `main` tú solo — eso lo hago yo manualmente en
-  GitHub tras revisar el PR.
+- Se trabaja directamente sobre `main`, sin ramas ni PRs intermedios —
+  cada push despliega al momento.
+- Antes de aplicar cambios importantes, explica el impacto (qué cambia,
+  qué riesgo tiene) y espera aprobación explícita antes de hacer commit.
+- Una vez aprobado, haz commit con un mensaje claro y push directo a
+  `main`.
 
 ## Convenciones
 - Todo el texto de la interfaz está en español.
