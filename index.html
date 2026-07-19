@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#10151C">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Gastos</title>
+<title>Tandem</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
@@ -35,7 +35,7 @@
   header .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:18px;letter-spacing:-.02em}
   header .brand-icon{height:16px;width:auto;display:block}
   header .brand-word{display:inline-flex;align-items:center}
-  header .brand-x{height:19px;width:auto;display:block;margin-left:-2px;transform:translateY(1px)}
+  header .brand-m{color:var(--accent)}
   .icon-btn{
     background:var(--surface); border:1px solid var(--border); color:var(--text);
     width:40px;height:40px;border-radius:12px;display:grid;place-items:center;cursor:pointer;font-size:18px
@@ -214,11 +214,35 @@
   .skel{background:linear-gradient(90deg,var(--surface) 25%,var(--surface-2) 50%,var(--surface) 75%);background-size:200% 100%;animation:sk 1.1s infinite;border-radius:12px}
   @keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
   .skel-card{height:64px;margin-bottom:10px}
+  /* Pantalla de carga con marca (se desvanece al arrancar la app) */
+  #splash{position:fixed;inset:0;z-index:200;background:var(--bg);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;padding:calc(24px + var(--safe-t)) 24px;transition:opacity .45s ease}
+  #splash.hide{opacity:0;pointer-events:none}
+  .sp-logo{display:flex;flex-direction:column;align-items:center;gap:12px;animation:spIn .6s cubic-bezier(.2,.7,.2,1) both}
+  .sp-owl{width:88px;height:auto;display:block}
+  .sp-word{font-family:Inter,system-ui,sans-serif;font-weight:700;font-size:34px;letter-spacing:-.02em;color:var(--text);line-height:1}
+  .sp-word .m{color:var(--accent)}
+  .sp-tag{font-size:13px;color:var(--muted);letter-spacing:.02em}
+  .sp-bar{width:118px;height:3px;border-radius:3px;background:var(--surface-2);overflow:hidden;margin-top:26px}
+  .sp-bar::after{content:'';display:block;height:100%;width:42%;background:var(--accent);border-radius:3px;animation:spBar 1.15s ease-in-out infinite}
+  @keyframes spIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  @keyframes spBar{0%{transform:translateX(-118%)}100%{transform:translateX(300%)}}
+  @media (prefers-reduced-motion:reduce){ .sp-logo{animation:none} .sp-bar::after{animation-duration:2.2s} }
 </style>
 </head>
 <body>
+  <!-- Pantalla de carga con marca: se pinta al instante y se desvanece cuando la app está lista -->
+  <div id="splash">
+    <div class="sp-logo">
+      <img class="sp-owl" src="vuox-icon.png" alt="TandeM">
+      <div class="sp-word">Tande<span class="m">M</span></div>
+      <div class="sp-tag">Gastos familiares</div>
+    </div>
+    <div class="sp-bar" aria-hidden="true"></div>
+  </div>
+
   <header>
-    <div class="brand"><img class="brand-icon" src="vuox-icon.png" alt="" aria-hidden="true"><span class="brand-word">Gastos<img class="brand-x" src="x-mark.png" alt="X"></span></div>
+    <div class="brand"><img class="brand-icon" src="vuox-icon.png" alt="" aria-hidden="true"><span class="brand-word">Tande<span class="brand-m">M</span></span></div>
     <button class="icon-btn" id="gear" aria-label="Ajustes">⚙</button>
   </header>
 
@@ -359,7 +383,7 @@
   <div class="overlay" id="lockScreen">
     <div style="min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center">
       <div style="font-size:36px">🔒</div>
-      <h2 style="margin:8px 0 2px">Gastos bloqueado</h2>
+      <h2 style="margin:8px 0 2px">Tandem bloqueado</h2>
       <p class="sub" style="margin:0 0 16px">Introduce el PIN de este móvil</p>
       <div id="lockDots" style="font-size:28px;letter-spacing:14px;font-family:'JetBrains Mono',monospace;min-height:34px">○○○○</div>
       <div class="q-pad" id="lockPad" style="width:100%;max-width:280px;margin-top:18px">
@@ -1204,6 +1228,16 @@
 
   if(Lock.hasPin()) openLock();
   else startApp();
+
+  // -------- desvanecer la pantalla de carga --------
+  // Se muestra un mínimo (para que no dé un parpadeo brusco) y se quita al cargar,
+  // con un tope de seguridad por si la red tarda mucho.
+  let splashDone=false;
+  function hideSplash(){ if(splashDone) return; splashDone=true; const s=$('splash'); if(!s) return; s.classList.add('hide'); setTimeout(()=>{ try{ s.remove(); }catch(e){} }, 500); }
+  (function(){ const start=Date.now();
+    window.addEventListener('load', ()=> setTimeout(hideSplash, Math.max(0, 550-(Date.now()-start))));
+    setTimeout(hideSplash, 1800);
+  })();
 </script>
 </body>
 </html>

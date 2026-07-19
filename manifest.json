@@ -1,6 +1,6 @@
 {
-  "name": "Gastos",
-  "short_name": "Gastos",
+  "name": "Tandem",
+  "short_name": "Tandem",
   "description": "Registro de gastos por voz o texto que sincroniza con Google Sheets",
   "start_url": "./index.html",
   "scope": "./",

@@ -1,6 +1,6 @@
 // Service worker: "red primero" para el HTML (así las actualizaciones se ven
 // enseguida) y caché para el resto. Sube ESTE archivo junto con index.html.
-const CACHE = 'gastos-v10';
+const CACHE = 'gastos-v11';
 const ASSETS = [
   './',
   './index.html',
