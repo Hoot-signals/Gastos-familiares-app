@@ -137,13 +137,20 @@
   .q-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:2px}
   .q-person{font-weight:700;font-size:14px;color:var(--muted)}
   .q-date{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer}
+  .q-amount-row{position:relative;display:flex;align-items:center;justify-content:center}
   .q-amount{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:34px;text-align:center;padding:4px 0 2px;letter-spacing:-.02em}
+  .q-amount.neg{color:var(--green)}
   .q-amount .q-cur{font-size:19px;color:var(--muted);margin-left:5px}
+  .q-back{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;
+    color:var(--muted);font-size:21px;cursor:pointer;padding:6px 8px;border-radius:10px;line-height:1}
+  .q-back:active{background:var(--surface-2)}
   .q-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:4px 0 8px}
   .q-pad button{background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:'JetBrains Mono',monospace;
     font-size:22px;font-weight:600;padding:10px 0;border-radius:12px;cursor:pointer}
   .q-pad button:active{background:var(--surface-2);transform:scale(.97)}
-  #qDel{color:var(--muted)}
+  /* Tecla − (signo negativo): al activarse, resalta en verde igual que el número */
+  #qNeg{color:var(--muted)}
+  #qNeg.active{background:rgba(78,203,142,.16);border-color:var(--green);color:var(--green)}
   .q-hint{text-align:center;color:var(--muted);font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
   .q-date.active{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
   .qm-row{display:flex;align-items:center;gap:8px;padding:9px 11px;background:var(--surface);border:1px solid var(--border);border-radius:12px;margin-bottom:6px;font-size:14px}
@@ -165,6 +172,11 @@
   .q-cat.more .emo{font-size:16px}
   /* Actividad */
   #act{flex:1;overflow-y:auto;padding:14px 16px calc(var(--tabbar-h) + var(--safe-b) + 14px)}
+  .act-search{width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);
+    border-radius:12px;padding:12px 14px;font-size:15px;font-family:Inter;outline:none;margin-bottom:12px}
+  .act-search:focus{border-color:var(--accent)}
+  .act-search::placeholder{color:var(--muted)}
+  .act-count{font-size:12px;color:var(--muted);font-weight:600;margin:0 2px 10px}
   .act-seg{display:flex;gap:8px;margin-bottom:14px}
   .act-tab{flex:1;padding:11px;border-radius:12px;border:1px solid var(--border);background:var(--surface);color:var(--muted);font-family:Inter;font-size:14px;font-weight:600;cursor:pointer}
   .act-tab.active{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -230,12 +242,15 @@
         <button class="q-date" id="qDateBtn">Hoy</button>
       </div>
     </div>
-    <div class="q-amount" id="qAmount">0<span class="q-cur">€</span></div>
+    <div class="q-amount-row">
+      <div class="q-amount" id="qAmount">0<span class="q-cur">€</span></div>
+      <button type="button" class="q-back" id="qBack" aria-label="Borrar">⌫</button>
+    </div>
     <div class="q-pad" id="qPad">
       <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
       <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
       <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
-      <button data-k=",">,</button><button data-k="0">0</button><button data-k="del" id="qDel">⌫</button>
+      <button data-k=",">,</button><button data-k="0">0</button><button data-k="neg" id="qNeg" title="Signo negativo">−</button>
     </div>
     <div class="q-hint" id="qHint">Toca una categoría para guardar</div>
     <div id="qMultiPanel" class="view-hidden">
@@ -247,7 +262,8 @@
 
   <!-- Actividad reciente -->
   <main id="act" class="view-hidden">
-    <div class="act-seg">
+    <input type="search" class="act-search" id="actSearch" placeholder="Buscar importe o categoría en todo el registro…" autocomplete="off" autocapitalize="off">
+    <div class="act-seg" id="actSeg">
       <button class="act-tab active" data-range="today">Hoy</button>
       <button class="act-tab" data-range="month">Últimos 30 días</button>
     </div>
@@ -827,10 +843,12 @@
   // ======================================================
   //  ACTIVIDAD RECIENTE
   // ======================================================
-  let actRange='today';
+  let actRange='today', actQuery='';
   document.querySelectorAll('.act-tab').forEach(t=> t.addEventListener('click', ()=>{
     actRange=t.dataset.range; document.querySelectorAll('.act-tab').forEach(x=>x.classList.toggle('active',x===t)); renderActivity();
   }));
+  // Buscador: al escribir algo se busca en TODO el registro (ignora Hoy/30 días); vacío = vista normal
+  $('actSearch').addEventListener('input', function(){ actQuery=this.value; renderActivity(); });
   function enterActivity(){
     const d=DL.cached();
     if(d) renderActivity(); else $('actBody').innerHTML=skel(5);
@@ -839,8 +857,25 @@
       if(DL.cached()) renderActivity(); else $('actBody').innerHTML = errorBox();
     });
   }
+  // Normaliza texto para buscar sin distinguir mayúsculas ni acentos (café == cafe)
+  const normTxt = s => String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  // Se muestra la FECHA DE GASTO; el ⋮ solo si la fila tiene id (las migradas podrían no tenerlo)
+  function actItemHTML(r){
+    const imp=Number(r.importe)||0;
+    return '<div class="act-item"><span class="act-time">'+ddmm(r.fecha)+'</span>'+
+      '<div class="act-main"><div class="act-cat">'+(EMO[r.categoria]||'')+' '+escapeHtml(r.categoria||'')+'</div>'+
+      (r.concepto?'<div class="act-desc">'+escapeHtml(r.concepto)+'</div>':'')+'</div>'+
+      '<span class="act-amt'+(imp<0?' neg':'')+'">'+eur(imp)+'</span>'+
+      (r.id!=null&&r.id!==''?'<button class="op-menu" data-id="'+r.id+'">⋮</button>':'')+'</div>';
+  }
+  function bindActMenus(){ $('actBody').querySelectorAll('.op-menu').forEach(b=> b.addEventListener('click', ()=> openEntryMenu(b.dataset.id))); }
+
   function renderActivity(){
     const data=DL.cached(); if(!data){ $('actBody').innerHTML = (DL.getError()? errorBox() : skel(5)); return; }
+    const q=(actQuery||'').trim();
+    $('actSeg').classList.toggle('view-hidden', !!q);   // las pestañas Hoy/30 días no aplican al buscar
+    if(q){ renderActivitySearch(data, q); return; }
+
     const hoy=new Date(); const hoyIso=localIso(hoy);
     const desde=new Date(hoy); desde.setDate(desde.getDate()-29); const desdeIso=localIso(desde);
     // ORDEN por fecha de INTRODUCCIÓN (creado); si no existe, cae a la fecha de gasto.
@@ -855,17 +890,30 @@
     if(!items.length){ $('actBody').innerHTML='<div class="dash-empty">Sin actividad '+(actRange==='today'?'hoy':'en los últimos 30 días')+'.</div>'; return; }
 
     let html = (DL.getError() && DL.getError()!=='sin-config') ? '<div class="stale-note">⚠ Sin conexión — datos en caché</div>' : '';
-    items.forEach(x=>{
-      const imp=Number(x.r.importe)||0;
-      // Se muestra la FECHA DE GASTO (no la de introducción); el orden es por introducción.
-      html+='<div class="act-item"><span class="act-time">'+ddmm(x.r.fecha)+'</span>'+
-        '<div class="act-main"><div class="act-cat">'+(EMO[x.r.categoria]||'')+' '+escapeHtml(x.r.categoria||'')+'</div>'+
-        (x.r.concepto?'<div class="act-desc">'+escapeHtml(x.r.concepto)+'</div>':'')+'</div>'+
-        '<span class="act-amt'+(imp<0?' neg':'')+'">'+eur(imp)+'</span>'+
-        '<button class="op-menu" data-id="'+x.r.id+'">⋮</button></div>';
-    });
+    items.forEach(x=>{ html+=actItemHTML(x.r); });
     $('actBody').innerHTML=html;
-    $('actBody').querySelectorAll('.op-menu').forEach(b=> b.addEventListener('click', ()=> openEntryMenu(b.dataset.id)));
+    bindActMenus();
+  }
+
+  // Busca en TODO el registro (todas las fechas, incluidos apuntes migrados) por
+  // categoría, concepto o importe. El importe casa por dígitos: "45" encuentra 45, 45,50, 145…
+  function renderActivitySearch(data, q){
+    const nq=normTxt(q);
+    const qNum=q.replace(',','.').replace(/[^\d.]/g,''); // parte numérica de la búsqueda (vacía si es texto)
+    const rows=data.rows.filter(r=>{
+      if(r.concepto==='(anulado)') return false;
+      if(normTxt(r.categoria).includes(nq) || normTxt(r.concepto).includes(nq)) return true;
+      if(qNum){
+        const imp=Number(r.importe)||0;
+        if(String(imp).includes(qNum) || String(Math.abs(imp)).includes(qNum)) return true;
+      }
+      return false;
+    }).sort((a,b)=> (b.fecha||'').localeCompare(a.fecha||'') || String(b.creado||'').localeCompare(String(a.creado||'')));
+    if(!rows.length){ $('actBody').innerHTML='<div class="dash-empty">Sin resultados para «'+escapeHtml(q)+'».</div>'; return; }
+    let html='<div class="act-count">'+rows.length+' resultado'+(rows.length===1?'':'s')+' en todo el registro</div>';
+    rows.forEach(r=>{ html+=actItemHTML(r); });
+    $('actBody').innerHTML=html;
+    bindActMenus();
   }
 
   // ======================================================
@@ -920,17 +968,28 @@
   // ======================================================
   const DEFAULT_QUICK = ['Alimentación','Café/cañas/Desayunos','Gasolina/Transporte','Comidas/Cenas restaurantes','Compras/Ropa/Estética','Niños','Ocio/Regalos/Juego','Otros gastos','Gato','Móvil/Internet','Limpieza'];
   const QUICK_N = 11;
-  let qAmt='', qDateIso=null, qPendingCat=null;
+  let qAmt='', qDateIso=null, qPendingCat=null, qNeg=false;
   function todayIso(){ return localIso(new Date()); }
-  function qValue(){ return parseFloat((qAmt||'').replace(',','.'))||0; }
-  function renderQAmount(){ $('qAmount').innerHTML=(qAmt||'0')+'<span class="q-cur">€</span>'; }
+  // qNeg = signo negativo del importe (tecla − del teclado); se guarda en negativo
+  function qValue(){ const v=parseFloat((qAmt||'').replace(',','.'))||0; return qNeg? -v : v; }
+  function renderQAmount(){
+    const showMinus = qNeg && qAmt;
+    $('qAmount').innerHTML=(showMinus?'−':'')+(qAmt||'0')+'<span class="q-cur">€</span>';
+    $('qAmount').classList.toggle('neg', !!showMinus);
+    const n=$('qNeg'); if(n) n.classList.toggle('active', qNeg);       // tecla − resaltada cuando el importe es negativo
+    const bk=$('qBack'); if(bk) bk.style.visibility = qAmt ? 'visible' : 'hidden';  // borrar solo si hay algo escrito
+  }
   function setQDateLabel(){ const t=todayIso(); if(qDateIso===t) $('qDateBtn').textContent='📅 Hoy'; else { const p=qDateIso.split('-'); $('qDateBtn').textContent='📅 '+p[2]+'/'+p[1]; } }
-  $('qPad').addEventListener('click',(e)=>{ const b=e.target.closest('button'); if(!b)return; const k=b.dataset.k||b.textContent.trim();
+  // Una sola función para las teclas: la usan el teclado (#qPad) y el borrar en línea (#qBack)
+  function pressKey(k){
     if(k==='del') qAmt=qAmt.slice(0,-1);
+    else if(k==='neg') qNeg=!qNeg;                       // tecla − : alterna el signo del importe
     else if(k===','){ if(qAmt && qAmt.indexOf(',')===-1) qAmt+=','; }
     else { if(qAmt.indexOf(',')!==-1 && qAmt.split(',')[1].length>=2) return; if(qAmt.replace(',','').length>=9) return; if(qAmt==='0') qAmt=k; else qAmt+=k; }
     renderQAmount();
-  });
+  }
+  $('qPad').addEventListener('click',(e)=>{ const b=e.target.closest('button'); if(!b)return; pressKey(b.dataset.k||b.textContent.trim()); });
+  $('qBack').addEventListener('click',()=> pressKey('del'));
   $('qDateBtn').addEventListener('click',()=>{ const dp=$('quickDate'); dp.value=qDateIso||todayIso(); if(dp.showPicker){try{dp.showPicker();return;}catch(e){}} dp.click(); });
   $('quickDate').addEventListener('change',function(){ if(this.value){ qDateIso=this.value; setQDateLabel(); } });
 
@@ -1018,7 +1077,7 @@
       multiItems.push({ categoria:mesesPendCat, importe:mesesPendVal, concepto, fecha: anio+'-'+String(mi+1).padStart(2,'0')+'-'+dia });
     });
     $('mesesPicker').classList.remove('open');
-    qAmt=''; renderQAmount();
+    qAmt=''; qNeg=false; renderQAmount();
     renderMultiList();
   });
 
@@ -1081,7 +1140,7 @@
     try{
       const r=await postJSON(c.webapp, payload({ action:'quick', importe:val, categoria:cat, fecha, persona:c.persona, concepto:desc }));
       if(!r.ok) throw new Error(r.error);
-      DL.patchAdd(r); qAmt=''; renderQAmount(); renderQuickCats();
+      DL.patchAdd(r); qAmt=''; qNeg=false; renderQAmount(); renderQuickCats();
       toast(eur(val)+' · '+cat+' ✓');
     }catch(err){ toast('No se pudo guardar: '+(err.message||err)); }
   });
