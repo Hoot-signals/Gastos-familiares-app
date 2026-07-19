@@ -39,45 +39,6 @@ var CATEGORIAS = [
   'Nóminas','Ingresos extraordinarios'
 ];
 var CATS_INGRESO = ['Nóminas','Ingresos extraordinarios'];
-var MES_NUM = { enero:1,febrero:2,marzo:3,abril:4,mayo:5,junio:6,julio:7,
-                agosto:8,septiembre:9,setiembre:9,octubre:10,noviembre:11,diciembre:12 };
-
-var KEYWORDS = {
-  'Hipoteca/Alquiler': ['hipoteca','alquiler','renta','casero','letra piso','mensualidad piso'],
-  'Muebles/Menaje': ['ikea','mueble','sofa','menaje','leroy','bricor','ferreteria','silla','mesa','decoracion','vajilla','sabana','toalla','colchon','lampara','estanteria'],
-  'Alimentación': ['mercadona','lidl','carrefour','aldi','dia','alcampo','eroski','consum','supermercado','super','compra','fruteria','panaderia','carniceria','pescaderia','alimentacion','pan','leche','verdura','fruta'],
-  'Niños': ['nino','hijo','alexia','fabian','panal','guarderia','colegio','cole','juguete','extraescolar','comedor','babero','carrito','chupete'],
-  'Compras/Ropa/Estética': ['ropa','zara','primark','hm','camiseta','pantalon','zapato','zapatilla','peluqueria','estetica','maquillaje','perfume','cosmetica','mango','vestido','abrigo','sudadera','manicura'],
-  'Móvil/Internet': ['movil','telefono','internet','fibra','movistar','vodafone','orange','yoigo','masmovil','o2','pepephone','digi','tarifa','datos'],
-  'Luz': ['luz','electricidad','iberdrola','endesa'],
-  'Gas': ['gas','butano','gasnatural','naturgy'],
-  'Agua': ['agua','canal','acometida'],
-  'Gato': ['gato','gata','veterinario','vet','pienso','arena gato','michi','antipulgas'],
-  'Gasolina/Transporte': ['gasolina','gasoil','gasoleo','diesel','repsol','cepsa','bp','galp','shell','combustible','metro','bus','autobus','taxi','uber','cabify','tren','renfe','billete','peaje','parking','aparcamiento','blablacar','transporte','abono transporte'],
-  'Otros gastos coche': ['taller','mecanico','itv','neumatico','rueda','revision','coche','recambio','embrague','freno','limpiaparabrisas'],
-  'Seguros': ['seguro','poliza','mapfre','mutua','allianz','axa','linea directa','reale','pelayo','zurich','caser'],
-  'Impuestos/Tasas/multas': ['impuesto','ibi','multa','tasa','hacienda','dgt','sancion','irpf','tributo'],
-  'Matriculas/cuotas': ['matricula','cuota','gimnasio','gym','suscripcion','netflix','spotify','hbo','max','prime','disney','filmin','membresia','abono','colegiado','club'],
-  'Café/cañas/Desayunos': ['cafe','cana','desayuno','cerveza','cortado','pincho','tapa','aperitivo','vermut','tostada','churros','merienda'],
-  'Comidas/Cenas restaurantes': ['restaurante','cena','almuerzo','menu','mcdonalds','burger','telepizza','glovo','ubereats','justeat','pizza','sushi','kebab','cenar','comer fuera','tapear','asador','marisqueria'],
-  'Viajes/Hoteles': ['viaje','hotel','booking','airbnb','vuelo','avion','ryanair','iberia','vueling','hostal','escapada','crucero'],
-  'Ocio/Regalos/Juego': ['ocio','cine','teatro','concierto','regalo','juego','loteria','apuesta','museo','entrada','evento','bolos','escape room','videojuego','steam','feria','discoteca'],
-  'Otros gastos': [],
-  'Pérdidas patrimoniales': ['perdida patrimonial','perdidas patrimoniales'],
-  'Varios invitaciones casa': ['invitados','invitacion','invitar','fiesta casa','cumple casa'],
-  'Limpieza': ['limpieza','limpiadora','asistenta','detergente','lejia','fairy','productos limpieza','suavizante','friegasuelos'],
-  'Nóminas': ['nomina','sueldo','salario','payroll'],
-  'Ingresos extraordinarios': ['ingreso','extraordinario','bonus','bonificacion','finiquito','paga extra','dividendo','devolucion renta','devolucion hacienda']
-};
-var PRIORIDAD = [
-  'Nóminas','Ingresos extraordinarios',
-  'Hipoteca/Alquiler','Seguros','Luz','Gas','Agua','Móvil/Internet','Gato',
-  'Gasolina/Transporte','Otros gastos coche','Impuestos/Tasas/multas',
-  'Matriculas/cuotas','Viajes/Hoteles','Niños','Café/cañas/Desayunos',
-  'Comidas/Cenas restaurantes','Alimentación','Compras/Ropa/Estética',
-  'Muebles/Menaje','Ocio/Regalos/Juego','Limpieza','Varios invitaciones casa',
-  'Pérdidas patrimoniales','Otros gastos'
-];
 
 // ============================================================
 //  LECTURA (dashboard + previsualización)
@@ -241,16 +202,9 @@ function doPost(e) {
       return json({ ok:true, resultados: resultados });
     }
 
-    // --- Nuevo apunte por chat (parser) ---
-    var p = parseGasto(body.text);
-    var id = Utilities.getUuid();
-    var SEP = sepDe(ss);
-    var row = siguienteFila(reg);
-    if (row > reg.getMaxRows()) reg.insertRowsAfter(reg.getMaxRows(), 1);
-    reg.getRange(row, 1, 1, 9).setValues([[ isoToDate(p.fecha), p.importe, p.categoria, p.concepto, body.persona || '',
-      formulaMes(row, SEP), formulaSemana(row, SEP), id, new Date() ]]);
-    return json({ ok:true, id:id, fecha:p.fecha, importe:p.importe,
-                  categoria:p.categoria, concepto:p.concepto, persona:body.persona||'' });
+    // Acción no reconocida (el parser de texto libre se retiró: la app solo
+    // manda acciones explícitas — quick/quick-batch/update*/delete)
+    return json({ ok:false, error:'Acción no reconocida: ' + body.action });
 
   } catch (err) {
     return json({ ok:false, error:String(err) });
@@ -314,127 +268,6 @@ function isoToDate(s) {
   var m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return new Date();
   return Utilities.parseDate(m[1]+'-'+m[2]+'-'+m[3]+' 00:00:00', TZ, 'yyyy-MM-dd HH:mm:ss');
-}
-
-// ============================================================
-//  Parser local (importe, fecha, categoría, concepto)
-// ============================================================
-function parseGasto(texto) {
-  var original = String(texto || '').trim();
-  var norm = quitarAcentos(original.toLowerCase());
-  var f = detectarFecha(norm);
-  var sinFecha = f.match ? norm.replace(f.match, ' ') : norm;
-  return {
-    importe:   extraerImporte(sinFecha),
-    fecha:     f.iso,
-    categoria: clasificar(sinFecha),
-    concepto:  limpiarConcepto(original)
-  };
-}
-
-function quitarAcentos(s) {
-  var lo = String.fromCharCode(768), hi = String.fromCharCode(879); // marcas diacríticas combinadas (tras NFD)
-  return s.normalize('NFD').replace(new RegExp('[' + lo + '-' + hi + ']', 'g'), '');
-}
-function isoDe(dt) { return Utilities.formatDate(dt, TZ, 'yyyy-MM-dd'); }
-
-function detectarFecha(norm) {
-  var hoy = new Date(), y = hoy.getFullYear(), m;
-
-  m = norm.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
-  if (m) {
-    var da = +m[1], moa = +m[2], ya = m[3] ? (+m[3] < 100 ? 2000 + (+m[3]) : +m[3]) : y;
-    if (da>=1 && da<=31 && moa>=1 && moa<=12) return { iso: isoDe(new Date(ya, moa-1, da)), match: m[0] };
-  }
-  m = norm.match(/\b(\d{1,2})\s+(?:de\s+)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)(?:\s+(?:de\s+)?(\d{4}))?\b/);
-  if (m) {
-    var db = +m[1], mob = MES_NUM[m[2]], yb = m[3] ? +m[3] : y;
-    if (db>=1 && db<=31) return { iso: isoDe(new Date(yb, mob-1, db)), match: m[0] };
-  }
-  if (/\bpasado\s+manana\b/.test(norm)) { var d1=new Date(); d1.setDate(d1.getDate()+2); return { iso:isoDe(d1), match:'pasado manana' }; }
-  if (/\bmanana\b/.test(norm))          { var d2=new Date(); d2.setDate(d2.getDate()+1); return { iso:isoDe(d2), match:'manana' }; }
-  if (/\banteayer\b/.test(norm))        { var d3=new Date(); d3.setDate(d3.getDate()-2); return { iso:isoDe(d3), match:'anteayer' }; }
-  if (/\bayer\b/.test(norm))            { var d4=new Date(); d4.setDate(d4.getDate()-1); return { iso:isoDe(d4), match:'ayer' }; }
-  if (/\bhoy\b/.test(norm))             { return { iso:isoDe(new Date()), match:'hoy' }; }
-
-  m = norm.match(/\b(?:dia|el)\s+(\d{1,2})\b/);
-  if (m) { var dd=+m[1]; if (dd>=1 && dd<=31) return { iso:isoDe(new Date(y, hoy.getMonth(), dd)), match:m[0] }; }
-
-  var dias = { domingo:0, lunes:1, martes:2, miercoles:3, jueves:4, viernes:5, sabado:6 };
-  for (var k in dias) {
-    var mm = norm.match(new RegExp('\\b(proximo\\s+)?' + k + '(\\s+que\\s+viene)?\\b'));
-    if (mm) {
-      var dt=new Date(), cur=dt.getDay(), tgt=dias[k], fut=!!(mm[1]||mm[2]), diff;
-      if (fut) { diff=(tgt-cur+7)%7; if (diff===0) diff=7; dt.setDate(dt.getDate()+diff); }
-      else     { diff=(cur-tgt+7)%7; dt.setDate(dt.getDate()-diff); }
-      return { iso:isoDe(dt), match:mm[0] };
-    }
-  }
-  return { iso: isoDe(new Date()), match: null };
-}
-
-function extraerImporte(norm) {
-  norm = norm.replace(/\bmenos\s+/g, '-');
-  var re = /(-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+(?:[.,]\d{1,2})?)/g;
-  var m, cs = [];
-  while ((m = re.exec(norm)) !== null) cs.push({ raw:m[1], idx:m.index, len:m[0].length });
-  if (!cs.length) return 0;
-  var elegido = null;
-  for (var i=0; i<cs.length; i++) {
-    var c = cs[i];
-    var antes = norm.slice(Math.max(0, c.idx - 2), c.idx);
-    var desp  = norm.slice(c.idx + c.len, c.idx + c.len + 8);
-    if (antes.indexOf('€') !== -1 || /^\s*(€|eur|euro)/.test(desp)) { elegido = c; break; }
-  }
-  if (!elegido) {
-    elegido = cs.map(function(c){ return { c:c, v:aNumero(c.raw) }; })
-                .sort(function(a,b){ return Math.abs(b.v) - Math.abs(a.v); })[0].c;
-  }
-  return aNumero(elegido.raw);
-}
-
-function aNumero(raw) {
-  var neg = false, s = raw;
-  if (s.charAt(0) === '-') { neg = true; s = s.slice(1); }
-  if (s.indexOf('.')!==-1 && s.indexOf(',')!==-1) s = s.replace(/\./g,'').replace(',','.');
-  else if (s.indexOf(',')!==-1) s = s.replace(',','.');
-  else if (/^\d{1,3}\.\d{3}$/.test(s)) s = s.replace('.','');
-  var n = parseFloat(s);
-  if (isNaN(n)) return 0;
-  n = Math.round(n * 100) / 100;
-  return neg ? -n : n;
-}
-
-function clasificar(norm) {
-  var mejor = 'Otros gastos', mejorScore = 0, mejorPrio = 999;
-  for (var cat in KEYWORDS) {
-    var kws = KEYWORDS[cat], score = 0;
-    for (var i = 0; i < kws.length; i++) {
-      var kw = quitarAcentos(kws[i]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      if (new RegExp('\\b' + kw + 's?\\b').test(norm)) score++;
-    }
-    if (score > 0) {
-      var prio = PRIORIDAD.indexOf(cat);
-      if (score > mejorScore || (score === mejorScore && prio < mejorPrio)) {
-        mejor = cat; mejorScore = score; mejorPrio = prio;
-      }
-    }
-  }
-  return mejor;
-}
-
-function limpiarConcepto(original) {
-  var s = ' ' + original + ' ';
-  s = s.replace(/\b\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\b/g, ' ');
-  s = s.replace(/-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|-?\d+(?:[.,]\d{1,2})?/g, ' ');
-  s = s.replace(/€|euros?|eur\b/gi, ' ');
-  s = s.replace(/\b(menos|hoy|ayer|anteayer|manana|mañana|pasado)\b/gi, ' ');
-  s = s.replace(/\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/gi, ' ');
-  s = s.replace(/\b(lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo|proximo|próximo|viene)\b/gi, ' ');
-  s = s.replace(/\b(de|del|el|la|los|las|un|una|unos|unas|que|dia|día)\b/gi, ' ');
-  s = s.replace(/\s+/g, ' ').trim();
-  if (!s) return 'Gasto';
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 // ============================================================

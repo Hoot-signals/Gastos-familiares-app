@@ -602,6 +602,11 @@
   // ======================================================
   const DL = (() => {
     let mem = null, inflight = null;
+    // Parches optimistas (patchAdd/patchUpdate) que llegan MIENTRAS un refresh()
+    // está en vuelo: si no se reaplicaran, el refresh los pisaría al volver con
+    // datos pedidos antes de que el parche existiera, y el apunte desaparecería
+    // de la UI hasta el siguiente refresh.
+    let duringRefresh = false, queued = [];
     function load(){ return mem; }                 // solo memoria (sesión); nada persistido
     function save(d){ mem = d; }
     function cached(){ return mem; }
@@ -612,20 +617,35 @@
       const c = cfg();
       if (!c.webapp || !c.sheet) { lastError = 'sin-config'; return cached(); }
       if (inflight) return inflight;
+      duringRefresh = true;
       inflight = (async () => {
         const url = c.webapp + '?token=' + encodeURIComponent(c.token) + '&sheetId=' + encodeURIComponent(sheetIdFrom(c.sheet)) + '&_=' + Date.now();
         const res = await fetch(url, { cache: 'no-store' });
         const d = await res.json();
-        if (d.ok) { lastError = null; save({ rows:d.rows||[], prevYear:d.prevYear||null, at:Date.now() }); }
+        if (d.ok) {
+          lastError = null;
+          save({ rows:d.rows||[], prevYear:d.prevYear||null, at:Date.now() });
+          queued.forEach(fn => fn());   // reaplica lo que llegó durante esta petición
+        }
         else { lastError = d.error || 'Error del servidor'; }
         return mem;
-      })().catch((e)=>{ lastError = 'Sin conexión con el servidor'; return mem; }).finally(()=> inflight=null);
+      })().catch((e)=>{ lastError = 'Sin conexión con el servidor'; return mem; })
+        .finally(()=>{ inflight=null; duringRefresh=false; queued=[]; });
       return inflight;
     }
     function getError(){ return lastError; }
     async function ensure(){ return cached() || await refresh(); }
-    function patchAdd(r){ const d=load(); if(!d) return; d.rows.push({fecha:r.fecha,importe:r.importe,categoria:r.categoria,concepto:r.concepto||'',persona:r.persona||'',id:r.id,creado:localStamp()}); save(d); }
-    function patchUpdate(id, f){ const d=load(); if(!d) return; const x=d.rows.find(r=>String(r.id)===String(id)); if(x) Object.assign(x,f); save(d); }
+    function patchAdd(r){
+      const d=load(); if(!d) return;
+      const row={fecha:r.fecha,importe:r.importe,categoria:r.categoria,concepto:r.concepto||'',persona:r.persona||'',id:r.id,creado:localStamp()};
+      d.rows.push(row); save(d);
+      if (duringRefresh) queued.push(()=>{ const m=load(); if(m && !m.rows.some(x=>String(x.id)===String(row.id))) m.rows.push(row); });
+    }
+    function patchUpdate(id, f){
+      const d=load(); if(!d) return;
+      const x=d.rows.find(r=>String(r.id)===String(id)); if(x) Object.assign(x,f); save(d);
+      if (duringRefresh) queued.push(()=>{ const m=load(); const y=m&&m.rows.find(r=>String(r.id)===String(id)); if(y) Object.assign(y,f); });
+    }
     function rowById(id){ const d=load(); return d? d.rows.find(r=>String(r.id)===String(id)) : null; }
     return { cached, refresh, ensure, patchAdd, patchUpdate, rowById, getError };
   })();
