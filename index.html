@@ -566,7 +566,7 @@
   // -------- util --------
   function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
   let toastT;
-  function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2200); }
+  function toast(msg, ms){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'), ms||2200); }
 
   // Añade el token y el sheetId (los mismos que usan las peticiones GET) a cualquier acción de escritura
   function payload(extra){
@@ -1156,17 +1156,26 @@
   }
   $('qcCancel').addEventListener('click',()=> $('qConfirm').classList.remove('open'));
   $('qConfirm').addEventListener('click',(e)=>{ if(e.target===$('qConfirm')) $('qConfirm').classList.remove('open'); });
-  $('qcOk').addEventListener('click', async ()=>{
+  // Optimista: el teclado se libera al instante (no se espera a la respuesta del
+  // servidor) para poder seguir metiendo apuntes sin esperar los 2-4s del backend.
+  // Si falla, NO se restaura el teclado (el usuario puede haber empezado ya el
+  // siguiente apunte) — se avisa con un toast largo y claro para reintroducirlo a mano.
+  $('qcOk').addEventListener('click', ()=>{
     const val=qValue(), cat=qPendingCat, fecha=qDateIso||todayIso(), desc=$('qcDesc').value.trim();
     if(!(Math.abs(val)>0)||!cat){ $('qConfirm').classList.remove('open'); return; }
     $('qConfirm').classList.remove('open');
     const c=cfg();
-    try{
-      const r=await postJSON(c.webapp, payload({ action:'quick', importe:val, categoria:cat, fecha, persona:c.persona, concepto:desc }));
-      if(!r.ok) throw new Error(r.error);
-      DL.patchAdd(r); qAmt=''; qNeg=false; renderQAmount(); renderQuickCats();
-      toast(eur(val)+' · '+cat+' ✓');
-    }catch(err){ toast('No se pudo guardar: '+(err.message||err)); }
+    qAmt=''; qNeg=false; renderQAmount();
+    toast(eur(val)+' · '+cat+' · guardando…');
+    postJSON(c.webapp, payload({ action:'quick', importe:val, categoria:cat, fecha, persona:c.persona, concepto:desc }))
+      .then(r=>{
+        if(!r.ok) throw new Error(r.error);
+        DL.patchAdd(r); renderQuickCats();
+        toast(eur(val)+' · '+cat+' ✓');
+      })
+      .catch(err=>{
+        toast('No se pudo guardar '+eur(val)+' · '+cat+' — vuelve a introducirlo. ('+(err.message||err)+')', 4500);
+      });
   });
 
   async function enterQuick(){

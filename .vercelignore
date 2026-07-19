@@ -1,0 +1,5 @@
+# Vercel sirve el repo como sitio estático plano: cualquier archivo trackeado
+# en git es accesible por URL si no está aquí. Estos NO deben ser públicos:
+CLAUDE.md
+*.gs
+.claude/
