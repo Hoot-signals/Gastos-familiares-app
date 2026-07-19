@@ -374,6 +374,21 @@
       </div>
       <p class="cfg-hint" id="pinHint">Sin PIN: cualquiera que abra este móvil ve la app directamente.</p>
 
+      <div id="bioBlock" class="view-hidden">
+        <label style="margin-top:18px">Desbloqueo por huella <span class="opt">(en vez de teclear el PIN)</span></label>
+        <div style="display:flex;gap:8px">
+          <button type="button" class="save-cfg" id="bioBtn" style="margin:0;flex:1;padding:12px;font-size:14px">Activar huella</button>
+          <button type="button" class="qc-cancel view-hidden" id="bioRemove" style="margin:0;flex:none;width:auto;padding:12px 16px;font-size:13px;border-radius:12px;font-weight:600">Quitar</button>
+        </div>
+        <p class="cfg-hint" id="bioHint"></p>
+      </div>
+
+      <div id="rememberBlock" class="view-hidden">
+        <label style="margin-top:18px">Recordar desbloqueo <span class="opt">(6 h en este móvil)</span></label>
+        <button type="button" class="save-cfg" id="rememberBtn" style="margin:0;width:100%;padding:12px;font-size:14px">Activar</button>
+        <p class="cfg-hint" id="rememberHint"></p>
+      </div>
+
       <button class="save-cfg" id="saveCfg">Guardar</button>
       <p class="cfg-hint">El enlace del Sheet cambia cada año; la URL de la Web App y la palabra secreta se quedan fijas.</p>
     </div>
@@ -384,7 +399,8 @@
     <div style="min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center">
       <div style="font-size:36px">🔒</div>
       <h2 style="margin:8px 0 2px">Tandem bloqueado</h2>
-      <p class="sub" style="margin:0 0 16px">Introduce el PIN de este móvil</p>
+      <p class="sub" id="lockSub" style="margin:0 0 16px">Introduce el PIN de este móvil</p>
+      <button type="button" class="save-cfg view-hidden" id="lockBioBtn" style="margin:0 0 18px;width:100%;max-width:280px;padding:14px">🫆 Usar huella</button>
       <div id="lockDots" style="font-size:28px;letter-spacing:14px;font-family:'JetBrains Mono',monospace;min-height:34px">○○○○</div>
       <div class="q-pad" id="lockPad" style="width:100%;max-width:280px;margin-top:18px">
         <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
@@ -435,6 +451,7 @@
   // El PIN es por móvil: cada persona lo configura en su propio dispositivo.
   const Lock = (() => {
     const K_SALT='pinSalt', K_ENC='cfgEnc', K_IV='cfgIv';
+    const K_BIO_CRED='bioCredId', K_BIO_WRAP='bioWrap', K_BIO_IV='bioIv';
     const te=new TextEncoder(), td=new TextDecoder();
     const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
     const fromB64 = s => Uint8Array.from(atob(s), c=>c.charCodeAt(0));
@@ -466,10 +483,88 @@
       return { data: JSON.parse(td.decode(pt)), key };
     }
     function clear(){ [K_SALT,K_ENC,K_IV].forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} }); }
-    return { hasPin, setup, reencrypt, unlock, clear };
+
+    // ---- Desbloqueo por huella/cara (WebAuthn + extensión PRF) ----
+    // La huella NO sustituye el cifrado del PIN: crea una credencial de la
+    // plataforma (huella/cara) cuya extensión PRF entrega, tras verificar al
+    // usuario, una clave AES real y reproducible. Esa clave solo envuelve el
+    // PIN en claro; para desbloquear de verdad se llama a unlock(pin) igual
+    // que si se hubiera tecleado — la fuerza del cifrado real no cambia.
+    const PRF_SALT = te.encode('tandem-bio-unlock-v1');
+    function hasBio(){ return !!(store.get(K_BIO_CRED) && store.get(K_BIO_WRAP) && store.get(K_BIO_IV)); }
+    async function bioAvailable(){
+      if (!window.PublicKeyCredential) return false;
+      try{
+        if (PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable)
+          return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+        return true;
+      }catch(e){ return false; }
+    }
+    async function evalPrf(credId){
+      const assertion = await navigator.credentials.get({ publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        allowCredentials: [{ id: credId, type:'public-key' }],
+        userVerification: 'required', timeout: 60000,
+        extensions: { prf: { eval: { first: PRF_SALT } } }
+      }});
+      const ext = assertion.getClientExtensionResults();
+      const prfBytes = ext.prf && ext.prf.results && ext.prf.results.first;
+      if (!prfBytes) throw new Error('no-prf');
+      return prfBytes;
+    }
+    // El PRF ya es material de alta entropía (salida de HMAC del autenticador);
+    // se usa directo como clave AES-256, sin KDF adicional.
+    function keyFromPrf(prfBytes){ return crypto.subtle.importKey('raw', prfBytes, 'AES-GCM', false, ['encrypt','decrypt']); }
+    async function bioSetup(pin){
+      if (!(await bioAvailable())) throw new Error('no-webauthn');
+      const cred = await navigator.credentials.create({ publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name:'TandeM', id: location.hostname },
+        user: { id: crypto.getRandomValues(new Uint8Array(16)), name:'tandem-local', displayName:'TandeM' },
+        pubKeyCredParams: [{ type:'public-key', alg:-7 }],
+        authenticatorSelection: { authenticatorAttachment:'platform', userVerification:'required', residentKey:'preferred' },
+        timeout: 60000, extensions: { prf: {} }
+      }});
+      const credId = new Uint8Array(cred.rawId);
+      const prfBytes = await evalPrf(credId); // confirma que el PRF funciona de verdad en este móvil (puede repetir el gesto)
+      const key = await keyFromPrf(prfBytes);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, te.encode(pin));
+      store.set(K_BIO_CRED, toB64(credId)); store.set(K_BIO_WRAP, toB64(ct)); store.set(K_BIO_IV, toB64(iv));
+    }
+    async function bioUnlock(){
+      const credIdB64=store.get(K_BIO_CRED), wrapB64=store.get(K_BIO_WRAP), ivB64=store.get(K_BIO_IV);
+      if (!credIdB64||!wrapB64||!ivB64) throw new Error('sin-huella');
+      const prfBytes = await evalPrf(fromB64(credIdB64));
+      const key = await keyFromPrf(prfBytes);
+      const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv:fromB64(ivB64)}, key, fromB64(wrapB64));
+      return unlock(td.decode(pt)); // mismo camino real que teclear el PIN
+    }
+    function bioClear(){ [K_BIO_CRED,K_BIO_WRAP,K_BIO_IV].forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} }); }
+
+    return { hasPin, setup, reencrypt, unlock, clear, hasBio, bioAvailable, bioSetup, bioUnlock, bioClear };
   })();
   // Secretos descifrados en memoria SOLO durante esta sesión (nunca en localStorage en claro si hay PIN)
   let sessionSecrets = null, sessionKey = null;
+
+  // -------- "Recordar desbloqueo 6 h" (opt-in, por móvil) --------
+  // OJO: es un downgrade de seguridad CONSCIENTE. Para abrir sin ningún gesto
+  // durante 6 h hay que guardar los secretos en claro en este móvil ese rato —
+  // cualquiera que coja el teléfono desbloqueado entra sin PIN ni huella. Por eso
+  // es opt-in, con caducidad dura, y cambiar los ajustes sigue exigiendo el PIN.
+  const Remember = (() => {
+    const K_ON='rememberOn', K_SEC='rememberSecrets', K_UNTIL='rememberUntil';
+    const MS = 6*60*60*1000;
+    function isOn(){ return store.get(K_ON)==='1'; }
+    function removeAll(){ [K_ON,K_SEC,K_UNTIL].forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} }); }
+    function clearData(){ [K_SEC,K_UNTIL].forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} }); }
+    function setOn(on){ if(on) store.set(K_ON,'1'); else removeAll(); }
+    function valid(){ return isOn() && (+(store.get(K_UNTIL)||0) > Date.now()) && !!store.get(K_SEC); }
+    function arm(data){ if(!isOn()||!data) return; store.set(K_SEC, JSON.stringify(data)); store.set(K_UNTIL, String(Date.now()+MS)); }   // en un desbloqueo real: (re)inicia la ventana
+    function syncSecrets(data){ if(valid()&&data) store.set(K_SEC, JSON.stringify(data)); }                                            // secretos cambiados: refresca la copia sin extender la ventana
+    function load(){ try{ return valid()? JSON.parse(store.get(K_SEC)) : null; }catch(e){ return null; } }
+    return { isOn, setOn, valid, arm, syncSecrets, load, clearData, removeAll };
+  })();
 
   const CATEGORIAS =['Hipoteca/Alquiler','Muebles/Menaje','Alimentación','Niños',
     'Compras/Ropa/Estética','Móvil/Internet','Luz','Gas','Agua','Gato',
@@ -496,8 +591,29 @@
     $('cfgWebapp').value=c.webapp; $('cfgSheet').value=c.sheet; $('cfgToken').value=c.token;
     setPersonaUI(c.persona);
     updatePinUI();
+    updateBioUI();
+    updateRememberUI();
     $('overlay').classList.add('open');
   }
+  function updateRememberUI(){
+    const pinActive = Lock.hasPin();
+    $('rememberBlock').classList.toggle('view-hidden', !pinActive);
+    if(!pinActive){ if(Remember.isOn()) Remember.setOn(false); return; } // sin PIN no hay nada que recordar
+    const on = Remember.isOn();
+    $('rememberBtn').textContent = on ? 'Activado · 6 h (tocar para quitar)' : 'Activar';
+    $('rememberHint').textContent = on
+      ? 'Durante 6 h la app se abre en este móvil sin pedir nada. Cambiar los ajustes sí seguirá pidiendo el PIN.'
+      : 'Evita pedir PIN/huella cada vez, durante 6 h. Menos privado: quien coja el móvil desbloqueado entra.';
+  }
+  $('rememberBtn').addEventListener('click', () => {
+    if(!Lock.hasPin()) return;
+    if(Remember.isOn()){ Remember.setOn(false); updateRememberUI(); toast('Desactivado'); return; }
+    if(!confirm('Durante 6 h la app se abrirá SIN pedir nada en este móvil. Cómodo, pero cualquiera que lo coja desbloqueado entrará. ¿Activar?')) return;
+    Remember.setOn(true);
+    if(sessionSecrets) Remember.arm(sessionSecrets); // ya estás desbloqueado: arranca la ventana desde ahora
+    updateRememberUI();
+    toast('Recordará el desbloqueo 6 h');
+  });
   function updatePinUI(){
     const has = Lock.hasPin();
     $('pinBtn').textContent = has ? 'Cambiar PIN' : 'Activar PIN';
@@ -506,25 +622,70 @@
       : 'Sin PIN: cualquiera que abra este móvil ve la app directamente.';
     $('pinRemove').classList.toggle('view-hidden', !has);
   }
+  async function updateBioUI(){
+    const pinActive = Lock.hasPin();
+    $('bioBlock').classList.toggle('view-hidden', !pinActive);
+    if (!pinActive) return;
+    const supported = await Lock.bioAvailable();
+    const active = Lock.hasBio();
+    $('bioBtn').textContent = active ? 'Huella activa' : 'Activar huella';
+    $('bioBtn').disabled = !supported || active;
+    $('bioRemove').classList.toggle('view-hidden', !active);
+    $('bioHint').textContent = !supported
+      ? 'Este móvil o navegador no soporta desbloqueo por huella.'
+      : active
+        ? 'Huella activa en este móvil — se ofrece en la pantalla de bloqueo junto al PIN.'
+        : 'Usa la huella o cara de este móvil en vez de teclear el PIN.';
+  }
   $('pinBtn').addEventListener('click', async () => {
     const pin = prompt('Nuevo PIN (4 dígitos):'); if(pin===null) return;
     if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser numérico, de 4 dígitos'); return; }
     const again = prompt('Repite el PIN:'); if(again!==pin){ toast('Los PIN no coinciden'); return; }
     const data = { webapp:$('cfgWebapp').value.trim(), sheet:$('cfgSheet').value.trim(), token:$('cfgToken').value.trim() };
+    const hadBio = Lock.hasBio();
     const { key } = await Lock.setup(pin, data);
+    if (hadBio) Lock.bioClear(); // la huella envolvía el PIN anterior; hace falta reactivarla con el nuevo
     sessionKey = key; sessionSecrets = data;
+    Remember.arm(data); // desbloqueo real → (re)inicia la ventana de 6 h si está activa
     try{ localStorage.removeItem('webapp'); localStorage.removeItem('sheet'); localStorage.removeItem('token'); }catch(e){}
-    updatePinUI();
-    toast('PIN activado');
+    updatePinUI(); updateBioUI(); updateRememberUI();
+    toast(hadBio ? 'PIN activado — vuelve a activar la huella' : 'PIN activado');
   });
   $('pinRemove').addEventListener('click', () => {
     if(!Lock.hasPin()) return;
     if(!confirm('¿Quitar el PIN? La palabra secreta quedará guardada sin cifrar en este móvil.')) return;
     const data = sessionSecrets || cfg();
     store.set('webapp', data.webapp); store.set('sheet', data.sheet); store.set('token', data.token);
-    Lock.clear(); sessionKey=null; sessionSecrets=null;
-    updatePinUI();
+    Lock.clear(); Lock.bioClear(); Remember.removeAll(); sessionKey=null; sessionSecrets=null;
+    updatePinUI(); updateBioUI(); updateRememberUI();
     toast('PIN eliminado');
+  });
+  $('bioBtn').addEventListener('click', async () => {
+    if (Lock.hasBio() || !(await Lock.bioAvailable())) return;
+    const pin = prompt('Confirma tu PIN actual para vincular la huella:'); if(pin===null) return;
+    let unlocked;
+    try{ unlocked = await Lock.unlock(pin); }
+    catch(e){ toast('PIN incorrecto'); return; }
+    try{
+      toast('Coloca el dedo cuando te lo pida (puede pedirlo dos veces)', 3500);
+      await Lock.bioSetup(pin);
+      sessionSecrets = unlocked.data; sessionKey = unlocked.key;
+      Remember.arm(sessionSecrets);
+      updateBioUI();
+      toast('Huella activada ✓');
+    }catch(err){
+      const msg = String((err && err.message) || err);
+      if (msg === 'no-prf') toast('Tu móvil no soporta cifrado real con huella', 3500);
+      else if (err && err.name === 'NotAllowedError') toast('Cancelado');
+      else toast('No se pudo activar la huella: ' + msg, 3500);
+    }
+  });
+  $('bioRemove').addEventListener('click', () => {
+    if(!Lock.hasBio()) return;
+    if(!confirm('¿Quitar el desbloqueo por huella? Seguirás pudiendo entrar con el PIN.')) return;
+    Lock.bioClear();
+    updateBioUI();
+    toast('Huella desactivada');
   });
   $('overlay').addEventListener('click',(e)=>{ if(e.target===$('overlay')) $('overlay').classList.remove('open'); });
 
@@ -546,10 +707,18 @@
     const webapp = $('cfgWebapp').value.trim(), sheet = $('cfgSheet').value.trim(), token = $('cfgToken').value.trim();
     store.set('persona', personaSel || 'Miguel');
     if (Lock.hasPin()) {
-      // ya desbloqueado esta sesión: recifra con la misma clave, sin volver a pedir el PIN
-      if (!sessionKey) { toast('Desbloquea con tu PIN para poder guardar'); return; }
-      await Lock.reencrypt(sessionKey, { webapp, sheet, token });
+      // Normalmente recifra con la clave ya en memoria. Pero en una sesión
+      // "recordada" (abierta sin gesto) no hay clave: cambiar los secretos es
+      // sensible, así que se pide el PIN aquí — step-up, no se puede eludir.
+      let key = sessionKey;
+      if (!key) {
+        const pin = prompt('Introduce tu PIN para guardar los cambios:'); if(pin===null) return;
+        try{ const u = await Lock.unlock(pin); key = u.key; sessionKey = key; }
+        catch(e){ toast('PIN incorrecto'); return; }
+      }
+      await Lock.reencrypt(key, { webapp, sheet, token });
       sessionSecrets = { webapp, sheet, token };
+      Remember.syncSecrets(sessionSecrets); // refresca la copia recordada (sin extender la ventana)
     } else {
       store.set('webapp', webapp); store.set('sheet', sheet); store.set('token', token);
     }
@@ -1209,7 +1378,12 @@
   // -------- pantalla de bloqueo (PIN) --------
   let lockPin = '';
   function lockRender(){ $('lockDots').textContent = '●'.repeat(lockPin.length) + '○'.repeat(Math.max(0,4-lockPin.length)); }
-  function openLock(){ lockPin=''; lockRender(); $('lockScreen').classList.add('open'); }
+  function openLock(){
+    lockPin=''; lockRender(); $('lockScreen').classList.add('open');
+    const bio = Lock.hasBio();
+    $('lockBioBtn').classList.toggle('view-hidden', !bio);
+    $('lockSub').textContent = bio ? 'Usa la huella o introduce el PIN' : 'Introduce el PIN de este móvil';
+  }
   $('lockPad').addEventListener('click', (e)=>{
     const b=e.target.closest('button'); if(!b) return; const k=b.dataset.k;
     if(k==='del'){ lockPin=lockPin.slice(0,-1); lockRender(); return; }
@@ -1223,6 +1397,7 @@
     try{
       const { data, key } = await Lock.unlock(pin);
       sessionSecrets = data; sessionKey = key;
+      Remember.arm(data); // desbloqueo real → inicia la ventana de 6 h si está activa
       $('lockScreen').classList.remove('open');
       lockPin=''; lockRender();
       startApp();
@@ -1231,9 +1406,26 @@
       toast('PIN incorrecto');
     }
   }
+  // La huella exige un gesto real del usuario (tocar el botón) para el prompt
+  // de WebAuthn — no se lanza sola al abrir la pantalla, algunos móviles lo
+  // bloquean sin un toque explícito. El PIN sigue siempre disponible debajo.
+  $('lockBioBtn').addEventListener('click', async () => {
+    $('lockBioBtn').disabled = true;
+    try{
+      const { data, key } = await Lock.bioUnlock();
+      sessionSecrets = data; sessionKey = key;
+      Remember.arm(data); // desbloqueo real → inicia la ventana de 6 h si está activa
+      $('lockScreen').classList.remove('open');
+      startApp();
+    }catch(err){
+      toast(err && err.name==='NotAllowedError' ? 'Cancelado' : 'No se pudo desbloquear con huella — usa el PIN');
+    }finally{
+      $('lockBioBtn').disabled = false;
+    }
+  });
   $('lockReset').addEventListener('click', ()=>{
     if(!confirm('Esto borrará el enlace, la palabra secreta y el PIN guardados en ESTE móvil. Tendrás que volver a introducirlos en Ajustes. Los datos del Sheet no se ven afectados. ¿Continuar?')) return;
-    Lock.clear();
+    Lock.clear(); Lock.bioClear(); Remember.removeAll();
     try{ localStorage.removeItem('webapp'); localStorage.removeItem('sheet'); localStorage.removeItem('token'); }catch(e){}
     sessionSecrets=null; sessionKey=null;
     $('lockScreen').classList.remove('open');
@@ -1255,8 +1447,17 @@
     window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
   }
 
-  if(Lock.hasPin()) openLock();
-  else startApp();
+  // Arranque: si hay PIN, normalmente pide desbloqueo. Excepción: "Recordar
+  // desbloqueo 6 h" activo y dentro de ventana → entra sin gesto (secretos
+  // cargados desde la copia recordada). Si la ventana caducó, se borra y se pide.
+  if(Lock.hasPin()){
+    const remembered = Remember.load();
+    if(remembered){ sessionSecrets = remembered; sessionKey = null; startApp(); }
+    else { Remember.clearData(); openLock(); }
+  } else {
+    Remember.removeAll(); // sin PIN no debe quedar ninguna copia recordada
+    startApp();
+  }
 
   // -------- desvanecer la pantalla de carga --------
   // Se muestra un mínimo (para que no dé un parpadeo brusco) y se quita al cargar,
