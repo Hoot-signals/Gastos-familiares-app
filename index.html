@@ -360,6 +360,9 @@
       <label>Palabra secreta <span class="opt">(la misma que pusiste en el script)</span></label>
       <input type="password" id="cfgToken" placeholder="casa2026xk" autocapitalize="off" autocorrect="off">
 
+      <button type="button" class="save-cfg" id="testCfg" style="margin:12px 0 0;width:100%;padding:12px;font-size:14px">Probar conexión</button>
+      <p class="cfg-hint" id="testHint">Comprueba lo que hay escrito arriba, sin guardar nada.</p>
+
       <label>¿Quién eres en este móvil?</label>
       <div class="seg" id="segPersona">
         <button data-p="Miguel" class="active">Miguel</button>
@@ -589,12 +592,43 @@
   function openSettings(){
     const c = cfg();
     $('cfgWebapp').value=c.webapp; $('cfgSheet').value=c.sheet; $('cfgToken').value=c.token;
+    $('testHint').innerHTML = TEST_HINT; $('testHint').style.color='';
     setPersonaUI(c.persona);
     updatePinUI();
     updateBioUI();
     updateRememberUI();
     $('overlay').classList.add('open');
   }
+  // "Probar conexión": prueba lo ESCRITO en los campos (aún sin guardar) y muestra
+  // una firma corta — cola de la URL + huella del secreto — para comparar dos
+  // móviles de un vistazo sin revelar la palabra secreta. Dos /exec distintos son
+  // indistinguibles a ojo: ahí se fue una tarde en septiembre de 2026.
+  const TEST_HINT = 'Comprueba lo que hay escrito arriba, sin guardar nada.';
+  const urlTail = (u) => { u=String(u||'').trim(); if(!u) return '—';
+    const m = u.match(/([A-Za-z0-9_-]{8})\/exec\/?$/); return m ? '…'+m[1]+'/exec' : '…'+u.slice(-14); };
+  async function tokenFp(t){
+    if(!t) return '(vacía)';
+    try{
+      const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t));
+      return '····'+Array.from(new Uint8Array(b)).slice(0,2).map(x=>x.toString(16).padStart(2,'0')).join('');
+    }catch(e){ return '(no calculable)'; }
+  }
+  $('testCfg').addEventListener('click', async () => {
+    const hint = $('testHint');
+    const show = (html, color) => { hint.innerHTML = html; hint.style.color = color || ''; };
+    const webapp = $('cfgWebapp').value.trim(), sheet = $('cfgSheet').value.trim(), token = $('cfgToken').value.trim();
+    const id = sheetIdFrom(sheet);
+    if(!webapp){ show('Falta la URL de la Web App.', 'var(--red)'); return; }
+    if(!id){ show('El enlace del Sheet no vale: tiene que llevar <b>/d/…</b>.', 'var(--red)'); return; }
+    const btn = $('testCfg'), label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Probando…';
+    const d = await getJSON(webapp + '?token=' + encodeURIComponent(token) + '&sheetId=' + encodeURIComponent(id) + '&_=' + Date.now());
+    btn.disabled = false; btn.textContent = label;
+    const firma = 'URL ' + escapeHtml(urlTail(webapp)) + ' · secreto ' + escapeHtml(await tokenFp(token));
+    if(d.ok) show('✅ Conecta bien — ' + ((d.rows||[]).length) + ' apuntes.<br>' + firma, 'var(--green)');
+    else show('⚠️ ' + escapeHtml(String(d.error||'Error')) + '<br>' + firma +
+             '<br>Compara esta línea con la del otro móvil: si no coincide, ahí está el fallo.', 'var(--red)');
+  });
   function updateRememberUI(){
     const pinActive = Lock.hasPin();
     $('rememberBlock').classList.toggle('view-hidden', !pinActive);
@@ -742,6 +776,26 @@
     const c = cfg();
     return Object.assign({ token: c.token, sheetId: sheetIdFrom(c.sheet) }, extra);
   }
+  // Traduce una respuesta que NO es JSON a un aviso que dice qué hacer. Sin esto
+  // todo acababa en un genérico "sin conexión" que señala al sitio equivocado: el
+  // caso real (sept. 2026) fue un /exec borrado, con la red perfecta.
+  function describeNonJson(res, text){
+    const t = String(text||'').slice(0, 4000);
+    if(/no existe|does not exist|unable to open|no se encuentra/i.test(t))
+      return 'Esa URL /exec ya no existe. Cópiala otra vez de Apps Script → Gestionar implementaciones.';
+    if(/accounts\.google\.com|iniciar sesión|necesitas permiso|need permission|sign in/i.test(t))
+      return 'El despliegue no es público: ponlo en «Quién tiene acceso: Cualquier usuario».';
+    return 'El servidor no devolvió JSON (HTTP '+res.status+')';
+  }
+  // GET que nunca lanza, con el mismo diagnóstico que postJSON.
+  async function getJSON(url){
+    let res;
+    try{ res = await fetch(url, { cache:'no-store' }); }
+    catch(e){ return { ok:false, error:'Sin conexión: este móvil no llega al servidor' }; }
+    let text; try{ text = await res.text(); }catch(e){ text = ''; }
+    try{ return JSON.parse(text); }
+    catch(e){ return { ok:false, error: describeNonJson(res, text) }; }
+  }
   // POST a la Web App de Apps Script. Content-Type text/plain evita el preflight
   // CORS que Apps Script no gestiona; el propio script hace JSON.parse del body.
   // Nunca lanza: ante fallo de red o respuesta no-JSON devuelve {ok:false,error}
@@ -760,8 +814,7 @@
     try{ text = await res.text(); }catch(e){ text = ''; }
     try{ return JSON.parse(text); }
     catch(e){
-      return { ok:false, error: res.ok ? 'Respuesta no válida del servidor'
-                                       : ('Error del servidor ('+res.status+')') };
+      return { ok:false, error: describeNonJson(res, text) };
     }
   }
 
@@ -789,8 +842,7 @@
       duringRefresh = true;
       inflight = (async () => {
         const url = c.webapp + '?token=' + encodeURIComponent(c.token) + '&sheetId=' + encodeURIComponent(sheetIdFrom(c.sheet)) + '&_=' + Date.now();
-        const res = await fetch(url, { cache: 'no-store' });
-        const d = await res.json();
+        const d = await getJSON(url);
         if (d.ok) {
           lastError = null;
           save({ rows:d.rows||[], prevYear:d.prevYear||null, at:Date.now() });
