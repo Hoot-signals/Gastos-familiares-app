@@ -787,11 +787,22 @@
       return 'El despliegue no es público: ponlo en «Quién tiene acceso: Cualquier usuario».';
     return 'El servidor no devolvió JSON (HTTP '+res.status+')';
   }
+  // Timeout duro para fetch: sin esto, una petición que el servidor acepta pero
+  // nunca responde (Apps Script colgado, o el móvil pierde cobertura a medias)
+  // deja la promesa pendiente para siempre. Como DL.refresh() reutiliza esa misma
+  // promesa mientras esté "inflight", una sola petición atascada dejaba Actividad
+  // y Análisis en "Cargando…" el resto de la sesión, aunque la red volviera.
+  const FETCH_TIMEOUT_MS = 15000;
+  function fetchWithTimeout(url, opts){
+    const ctrl = new AbortController();
+    const t = setTimeout(()=>ctrl.abort(), FETCH_TIMEOUT_MS);
+    return fetch(url, Object.assign({}, opts, { signal: ctrl.signal })).finally(()=>clearTimeout(t));
+  }
   // GET que nunca lanza, con el mismo diagnóstico que postJSON.
   async function getJSON(url){
     let res;
-    try{ res = await fetch(url, { cache:'no-store' }); }
-    catch(e){ return { ok:false, error:'Sin conexión: este móvil no llega al servidor' }; }
+    try{ res = await fetchWithTimeout(url, { cache:'no-store' }); }
+    catch(e){ return { ok:false, error: e.name==='AbortError' ? 'El servidor no respondió a tiempo' : 'Sin conexión: este móvil no llega al servidor' }; }
     let text; try{ text = await res.text(); }catch(e){ text = ''; }
     try{ return JSON.parse(text); }
     catch(e){ return { ok:false, error: describeNonJson(res, text) }; }
@@ -804,12 +815,12 @@
   async function postJSON(url, data){
     let res;
     try{
-      res = await fetch(url, {
+      res = await fetchWithTimeout(url, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(data)
       });
-    }catch(e){ return { ok:false, error:'Sin conexión con el servidor' }; }
+    }catch(e){ return { ok:false, error: e.name==='AbortError' ? 'El servidor no respondió a tiempo' : 'Sin conexión con el servidor' }; }
     let text;
     try{ text = await res.text(); }catch(e){ text = ''; }
     try{ return JSON.parse(text); }
