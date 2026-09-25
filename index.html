@@ -792,7 +792,7 @@
   // deja la promesa pendiente para siempre. Como DL.refresh() reutiliza esa misma
   // promesa mientras esté "inflight", una sola petición atascada dejaba Actividad
   // y Análisis en "Cargando…" el resto de la sesión, aunque la red volviera.
-  const FETCH_TIMEOUT_MS = 15000;
+  const FETCH_TIMEOUT_MS = 25000;
   function fetchWithTimeout(url, opts){
     const ctrl = new AbortController();
     const t = setTimeout(()=>ctrl.abort(), FETCH_TIMEOUT_MS);
