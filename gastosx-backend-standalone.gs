@@ -49,12 +49,35 @@ function doGet(e) {
     var props = PropertiesService.getScriptProperties();
     var token = props.getProperty('APP_TOKEN');
     if (!token || (e.parameter.token || '') !== token) return json({ ok:false, error:'Token inválido' });
-    if (!e.parameter.sheetId) return json({ ok:false, error:'Falta sheetId' });
+    var sheetId = e.parameter.sheetId;
+    if (!sheetId) return json({ ok:false, error:'Falta sheetId' });
 
-    var ss = SpreadsheetApp.openById(e.parameter.sheetId);
+    // Acierto de caché: ni se abre el Sheet (de 2-7 s a una fracción de segundo)
+    var hit = cacheLeer(sheetId);
+    if (hit) return texto(hit);
+
+    // Fallo: se lee CON el lock de escritura, para que un guardado simultáneo no
+    // deje en caché datos de antes de él. Sin lock en 5 s, se lee sin cachear.
+    var lock = LockService.getScriptLock();
+    var conLock = lock.tryLock(5000);
+    try {
+      if (conLock) { hit = cacheLeer(sheetId); if (hit) return texto(hit); }
+      var s = JSON.stringify(leerTodo(sheetId));
+      if (conLock) cacheGuardar(sheetId, s);
+      return texto(s);
+    } finally {
+      if (conLock) lock.releaseLock();
+    }
+  } catch (err) {
+    return json({ ok:false, error:String(err) });
+  }
+}
+
+function leerTodo(sheetId) {
+    var ss = SpreadsheetApp.openById(sheetId);
     TZ = ss.getSpreadsheetTimeZone();
     var reg = getRegistroSheet(ss);
-    var last = ultimaFilaDatos(reg);
+    var last = reg.getLastRow();   // nativo; las filas sin fecha se saltan abajo
     var rows = [];
     if (last >= 2) {
       var data = reg.getRange(2, 1, last - 1, 9).getValues(); // A..I (una sola lectura)
@@ -74,23 +97,64 @@ function doGet(e) {
         });
       }
     }
-    return json({
+    return {
       ok: true, rows: rows,
       prevYear: totalesMensuales(ss)   // año anterior: pestaña "Global Año" del mismo Sheet
-    });
-  } catch (err) {
-    return json({ ok:false, error:String(err) });
-  }
+    };
 }
 
 // Año anterior: pestaña "Global Año" del mismo Sheet.
-// Fila 11 = Ingresos, fila 12 = Gastos, columnas B:M = Enero..Diciembre.
+// Fila 11 = Ingresos, fila 12 = Gastos, columnas C:N = Enero..Diciembre.
 function totalesMensuales(ss) {
   var sh = ss.getSheetByName('Global Año');
   if (!sh) return null;
-  var ing = sh.getRange(11, 3, 1, 12).getValues()[0].map(function(v){ return Number(v) || 0; });
-  var gas = sh.getRange(12, 3, 1, 12).getValues()[0].map(function(v){ return Number(v) || 0; });
-  return { gastos: gas, ingresos: ing };
+  var v = sh.getRange(11, 3, 2, 12).getValues();   // filas 11-12 en una sola lectura
+  var num = function(x){ return Number(x) || 0; };
+  return { gastos: v[1].map(num), ingresos: v[0].map(num) };
+}
+
+// ============================================================
+//  CACHÉ de la lectura (CacheService, por Sheet)
+//  Se invalida en cada escritura de la app. Las ediciones hechas A MANO en el
+//  Sheet tardan como mucho CACHE_TTL en verse en la app.
+//  Un valor de CacheService admite ~100 KB: el JSON se trocea, y cada versión
+//  usa claves propias para que una lectura nunca mezcle trozos de dos versiones.
+// ============================================================
+var CACHE_TTL = 300;      // segundos
+var CACHE_TROZO = 30000;  // caracteres por trozo (margen para tildes/emoji en UTF-8)
+
+function cacheLeer(sheetId) {
+  try {
+    var c = CacheService.getScriptCache();
+    var meta = c.get('get:' + sheetId);          // "<version>:<nº trozos>"
+    if (!meta) return null;
+    var p = meta.split(':'), n = Number(p[1]), claves = [];
+    for (var i = 0; i < n; i++) claves.push('get:' + sheetId + ':' + p[0] + ':' + i);
+    var trozos = c.getAll(claves), s = '';
+    for (var j = 0; j < n; j++) { if (trozos[claves[j]] == null) return null; s += trozos[claves[j]]; }
+    return s;
+  } catch (e) { return null; }
+}
+
+function cacheGuardar(sheetId, s) {
+  try {
+    var c = CacheService.getScriptCache();
+    var ver = String(Date.now()), obj = {}, n = 0, i = 0;
+    do {
+      var fin = Math.min(i + CACHE_TROZO, s.length);
+      // no partir un emoji (par sustituto UTF-16): media mitad no sobrevive a UTF-8
+      var cc = s.charCodeAt(fin - 1);
+      if (fin < s.length && cc >= 0xD800 && cc <= 0xDBFF) fin--;
+      obj['get:' + sheetId + ':' + ver + ':' + n++] = s.substring(i, fin);
+      i = fin;
+    } while (i < s.length);
+    c.putAll(obj, CACHE_TTL + 60);                // los trozos sobreviven un poco más que el índice
+    c.put('get:' + sheetId, ver + ':' + n, CACHE_TTL);
+  } catch (e) {}
+}
+
+function cacheBorrar(sheetId) {
+  try { CacheService.getScriptCache().remove('get:' + sheetId); } catch (e) {}
 }
 
 // ============================================================
@@ -98,6 +162,7 @@ function totalesMensuales(ss) {
 // ============================================================
 function doPost(e) {
   var lock = LockService.getScriptLock();
+  var sheetEscrito = null;
   try {
     var body  = JSON.parse(e.postData.contents);
     var props = PropertiesService.getScriptProperties();
@@ -107,6 +172,7 @@ function doPost(e) {
     if (!body.sheetId) return json({ ok:false, error:'Falta el enlace del Sheet en Ajustes' });
 
     lock.waitLock(20000);
+    sheetEscrito = body.sheetId;
     var ss  = SpreadsheetApp.openById(body.sheetId);
     TZ = ss.getSpreadsheetTimeZone(); // usa el huso horario REAL del Sheet, no un valor fijo
     var reg = getRegistroSheet(ss);
@@ -209,6 +275,12 @@ function doPost(e) {
   } catch (err) {
     return json({ ok:false, error:String(err) });
   } finally {
+    // Todavía con el lock: escribir de verdad y luego invalidar, para que el
+    // siguiente doGet no sirva datos de antes de este guardado.
+    if (sheetEscrito) {
+      try { SpreadsheetApp.flush(); } catch (e3) {}
+      cacheBorrar(sheetEscrito);
+    }
     try { lock.releaseLock(); } catch (e2) {}
   }
 }
@@ -274,5 +346,8 @@ function isoToDate(s) {
 //  Utilidad de respuesta
 // ============================================================
 function json(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+  return texto(JSON.stringify(obj));
+}
+function texto(s) {
+  return ContentService.createTextOutput(s).setMimeType(ContentService.MimeType.JSON);
 }

@@ -739,6 +739,7 @@
   });
   $('saveCfg').onclick = async () => {
     const webapp = $('cfgWebapp').value.trim(), sheet = $('cfgSheet').value.trim(), token = $('cfgToken').value.trim();
+    const sheetCambia = sheetIdFrom(sheet) !== sheetIdFrom(cfg().sheet);
     store.set('persona', personaSel || 'Miguel');
     if (Lock.hasPin()) {
       // Normalmente recifra con la clave ya en memoria. Pero en una sesión
@@ -756,6 +757,7 @@
     } else {
       store.set('webapp', webapp); store.set('sheet', sheet); store.set('token', token);
     }
+    if(sheetCambia) DL.clear();   // Sheet de otro año: no mezclar con los datos guardados del anterior
     $('overlay').classList.remove('open');
     toast('Ajustes guardados');
     DL.refresh().then(()=>{ enterQuick(); });
@@ -802,7 +804,7 @@
   async function getJSON(url){
     let res;
     try{ res = await fetchWithTimeout(url, { cache:'no-store' }); }
-    catch(e){ return { ok:false, error: e.name==='AbortError' ? 'El servidor no respondió a tiempo' : 'Sin conexión: este móvil no llega al servidor' }; }
+    catch(e){ return { ok:false, retry:true, error: e.name==='AbortError' ? 'El servidor no respondió a tiempo' : 'Sin conexión: este móvil no llega al servidor' }; }
     let text; try{ text = await res.text(); }catch(e){ text = ''; }
     try{ return JSON.parse(text); }
     catch(e){ return { ok:false, error: describeNonJson(res, text) }; }
@@ -840,30 +842,80 @@
     // datos pedidos antes de que el parche existiera, y el apunte desaparecería
     // de la UI hasta el siguiente refresh.
     let duringRefresh = false, queued = [];
-    function load(){ return mem; }                 // solo memoria (sesión); nada persistido
-    function save(d){ mem = d; }
+    function load(){ return mem; }
+    function save(d){ mem = d; persist(); }
     function cached(){ return mem; }
-    // limpia cualquier caché persistida de versiones anteriores (fuente del total viejo)
+    // limpia cachés en claro de versiones anteriores
     try { localStorage.removeItem('gastos_cache_v1'); localStorage.removeItem('gastos_cache_v2'); } catch(e){}
+
+    // ---- Caché local cifrada: la app abre al instante con los últimos datos
+    // y se actualiza por detrás; si el servidor falla, se sigue viendo todo.
+    // La clave sale de la palabra secreta: con PIN, el token solo existe en
+    // claro tras desbloquear, así que estos datos quedan igual de protegidos.
+    const K_CACHE = 'dataCache';
+    const te = new TextEncoder(), td = new TextDecoder();
+    const bufToB64 = buf => { const u=new Uint8Array(buf); let s=''; for(let i=0;i<u.length;i+=0x8000) s+=String.fromCharCode.apply(null, u.subarray(i,i+0x8000)); return btoa(s); };
+    const b64ToBuf = s => Uint8Array.from(atob(s), c=>c.charCodeAt(0));
+    let keyMemo = { token:null, key:null };
+    async function cacheKey(token){
+      if (keyMemo.token === token) return keyMemo.key;
+      const base = await crypto.subtle.importKey('raw', te.encode(token), 'PBKDF2', false, ['deriveKey']);
+      const key = await crypto.subtle.deriveKey({ name:'PBKDF2', salt:te.encode('tandem-cache-v1'), iterations:100000, hash:'SHA-256' },
+        base, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+      keyMemo = { token, key }; return key;
+    }
+    let persistT = null;
+    function persist(){ clearTimeout(persistT); persistT = setTimeout(persistNow, 400); }
+    async function persistNow(){
+      const d = mem, token = cfg().token; if (!d || !token) return;
+      try{
+        const key = await cacheKey(token);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, te.encode(JSON.stringify(d)));
+        localStorage.setItem(K_CACHE, JSON.stringify({ iv:bufToB64(iv), ct:bufToB64(ct) }));
+      }catch(e){}   // sin espacio o sin crypto: la app sigue igual, solo sin caché entre aperturas
+    }
+    async function hydrate(){
+      const c = cfg(); if (mem || !c.token || !c.sheet) return;
+      try{
+        const raw = localStorage.getItem(K_CACHE); if (!raw) return;
+        const { iv, ct } = JSON.parse(raw);
+        const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv:b64ToBuf(iv) }, await cacheKey(c.token), b64ToBuf(ct));
+        const d = JSON.parse(td.decode(pt));
+        if (!mem && d && Array.isArray(d.rows) && d.sheetId === sheetIdFrom(c.sheet)) mem = d;
+      }catch(e){}   // token cambiado o caché corrupta: se ignora y se pide al servidor
+    }
+    // gen: cada clear() abre una generación nueva; una petición lanzada antes
+    // (p.ej. con el Sheet del año anterior) ya no puede escribir al volver.
+    let gen = 0;
+    function clear(){ clearTimeout(persistT); mem = null; gen++; inflight = null; duringRefresh = false; queued = []; lastError = null;
+      try{ localStorage.removeItem(K_CACHE); }catch(e){} }
+
     let lastError = null;
     async function refresh(){
       const c = cfg();
       if (!c.webapp || !c.sheet) { lastError = 'sin-config'; return cached(); }
       if (inflight) return inflight;
       duringRefresh = true;
-      inflight = (async () => {
-        const url = c.webapp + '?token=' + encodeURIComponent(c.token) + '&sheetId=' + encodeURIComponent(sheetIdFrom(c.sheet)) + '&_=' + Date.now();
-        const d = await getJSON(url);
+      const myGen = gen;
+      const p = (async () => {
+        const sheetId = sheetIdFrom(c.sheet);
+        const url = () => c.webapp + '?token=' + encodeURIComponent(c.token) + '&sheetId=' + encodeURIComponent(sheetId) + '&_=' + Date.now();
+        let d = await getJSON(url());
+        // Los fallos de red de Apps Script son intermitentes: un reintento salva la mayoría
+        if (!d.ok && d.retry && myGen === gen) { await new Promise(r => setTimeout(r, 1500)); d = await getJSON(url()); }
+        if (myGen !== gen) return mem;
         if (d.ok) {
           lastError = null;
-          save({ rows:d.rows||[], prevYear:d.prevYear||null, at:Date.now() });
+          save({ rows:d.rows||[], prevYear:d.prevYear||null, at:Date.now(), sheetId });
           queued.forEach(fn => fn());   // reaplica lo que llegó durante esta petición
         }
         else { lastError = d.error || 'Error del servidor'; }
         return mem;
-      })().catch((e)=>{ lastError = 'Sin conexión con el servidor'; return mem; })
-        .finally(()=>{ inflight=null; duringRefresh=false; queued=[]; });
-      return inflight;
+      })().catch((e)=>{ if (myGen === gen) lastError = 'Sin conexión con el servidor'; return mem; })
+        .finally(()=>{ if (inflight === p) { inflight=null; duringRefresh=false; queued=[]; } });
+      inflight = p;
+      return p;
     }
     function getError(){ return lastError; }
     async function ensure(){ return cached() || await refresh(); }
@@ -879,7 +931,7 @@
       if (duringRefresh) queued.push(()=>{ const m=load(); const y=m&&m.rows.find(r=>String(r.id)===String(id)); if(y) Object.assign(y,f); });
     }
     function rowById(id){ const d=load(); return d? d.rows.find(r=>String(r.id)===String(id)) : null; }
-    return { cached, refresh, ensure, patchAdd, patchUpdate, rowById, getError };
+    return { cached, refresh, ensure, patchAdd, patchUpdate, rowById, getError, hydrate, clear };
   })();
 
   const INGRESO_CATS = ['Nóminas','Ingresos extraordinarios'];
@@ -939,6 +991,14 @@
     return '<div class="dash-empty">No se pudieron cargar los datos.<br><span style="color:var(--red)">'+escapeHtml(String(err||''))+'</span><br><br>'+
            'Revisa en ⚙ Ajustes que la <b>palabra secreta</b> y el <b>enlace del Sheet</b> coinciden con los de tu otro móvil.<br><br>'+
            '<button class="sheet-link" style="max-width:220px;margin:0 auto" onclick="location.reload()">Reintentar</button></div>';
+  }
+
+  function staleNote(){
+    const err = DL.getError(), d = DL.cached();
+    if(!err || err==='sin-config' || !d) return '';
+    const min = Math.max(0, Math.round((Date.now()-(d.at||0))/60000));
+    const hace = min<1 ? 'hace un momento' : min<60 ? 'hace '+min+' min' : min<1440 ? 'hace '+Math.round(min/60)+' h' : 'hace '+Math.round(min/1440)+' días';
+    return '<div class="stale-note">⚠ No se pudo actualizar — datos de '+hace+'</div>';
   }
 
   // Totales mensuales calculados EN CLIENTE desde las filas (reactivo a ediciones)
@@ -1011,7 +1071,7 @@
     const monthly = computeMonthly(data.rows);   // reactivo: se recalcula tras cada edición
     const prev = data.prevYear || null;          // año anterior: pestaña "Global Año" del mismo Sheet
     let html = '';
-    if(DL.getError() && DL.getError()!=='sin-config') html += '<div class="stale-note">⚠ Sin conexión — datos en caché, puede que no estén al día</div>';
+    html += staleNote();
     const {y,m} = dashMonth;
     $('mLabel').textContent = MESES_ES[m]+' '+y;
     const pref = y+'-'+String(m+1).padStart(2,'0');
@@ -1165,7 +1225,7 @@
     items.sort((a,b)=> b.intro.localeCompare(a.intro)); // introducidos más recientemente primero
     if(!items.length){ $('actBody').innerHTML='<div class="dash-empty">Sin actividad '+(actRange==='today'?'hoy':'en los últimos 30 días')+'.</div>'; return; }
 
-    let html = (DL.getError() && DL.getError()!=='sin-config') ? '<div class="stale-note">⚠ Sin conexión — datos en caché</div>' : '';
+    let html = staleNote();
     items.forEach(x=>{ html+=actItemHTML(x.r); });
     $('actBody').innerHTML=html;
     bindActMenus();
@@ -1488,7 +1548,7 @@
   });
   $('lockReset').addEventListener('click', ()=>{
     if(!confirm('Esto borrará el enlace, la palabra secreta y el PIN guardados en ESTE móvil. Tendrás que volver a introducirlos en Ajustes. Los datos del Sheet no se ven afectados. ¿Continuar?')) return;
-    Lock.clear(); Lock.bioClear(); Remember.removeAll();
+    Lock.clear(); Lock.bioClear(); Remember.removeAll(); DL.clear();
     try{ localStorage.removeItem('webapp'); localStorage.removeItem('sheet'); localStorage.removeItem('token'); }catch(e){}
     sessionSecrets=null; sessionKey=null;
     $('lockScreen').classList.remove('open');
@@ -1497,7 +1557,8 @@
   });
 
   // -------- arranque de la app (tras desbloquear, o directo si no hay PIN) --------
-  function startApp(){
+  async function startApp(){
+    await DL.hydrate();   // pinta al instante con los datos guardados de la última vez
     if(cfg().webapp && cfg().sheet) enterQuick();
     // prefetch al arrancar (tras primer render): calienta la caché
     setTimeout(()=>{ if(cfg().webapp && cfg().sheet) DL.refresh(); }, 300);
